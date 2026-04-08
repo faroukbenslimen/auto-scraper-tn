@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.Python
+
+# Distribution / build
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Data and debug outputs
+/data/
+/data/*.csv
+debug_page.html
+
+# Secrets
+.env
+*.pem
+*.key
+credentials.json
+
+# IDEs / editors
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Drivers / binaries
+chromedriver*
+msedgedriver*
+*.exe
+
+# Logs
+*.log
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
