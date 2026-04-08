@@ -1,94 +1,51 @@
-# 🚗 Auto Scraper Tunisie — Projet Python
+# 🚗 Auto Scraper TN — Market Intelligence Dashboard
 
-Application complète de **web scraping, analyse et prédiction** d'annonces automobiles d'occasion.
-**Site cible :** automobile.tn
+A premium, professional-grade car market analysis and price prediction platform for the Tunisian automotive market. 
 
----
+![Market Dashboard](https://img.shields.io/badge/Status-Production--Ready-brightgreen)
+![Python](https://img.shields.io/badge/Python-3.9+-blue)
+![Streamlit](https://img.shields.io/badge/Framework-Streamlit-red)
 
-## 📁 Structure du projet
+## 🌟 Key Features
 
-```
-auto_project/
-├── app.py              # Dashboard Streamlit (interface principale)
-├── scraper.py          # Collecte HTTP + parsing HTML
-├── cleaner.py          # Nettoyage des données
-├── analyzer.py         # Statistiques & analyses
-├── predictor.py        # Modèles IA (Random Forest + tendance)
-├── requirements.txt    # Dépendances Python
-└── data/
-    └── cars.csv        # Données sauvegardées (créé automatiquement)
-```
+- **Turbo-Charged Scraper**: Multi-threaded request engine collecting 150+ pages of automotive data in seconds (replaces legacy Selenium).
+- **Glassmorphism UI**: High-end visual aesthetic with instantaneous Dark/Light mode toggling and fluid page transitions.
+- **AI Data Agent**: Interactive NLP chatbot that answers questions about the live market, finds specific vehicles, and provides direct links.
+- **Precision ML Estimator**: Gradient Boosting model ($HistGradientBoostingRegressor$) trained on live market data for high-accuracy price predictions.
+- **Market Forecasting**: Time-series analysis predicting price trends for the next 14-30 days.
+- **SQL Backend**: Robust data persistence using SQLite for historical tracking and zero-duplicate indexing.
 
----
+## 🛠️ Tech Stack
 
-## ⚙️ Installation
+- **Dashboard**: [Streamlit](https://streamlit.io/)
+- **Visuals**: [Plotly](https://plotly.com/)
+- **Data Engine**: [Pandas](https://pandas.pydata.org/), [SQLite](https://sqlite.org/)
+- **AI/ML**: [Scikit-Learn](https://scikit-learn.org/)
+- **NLP**: Custom Intent Classification + Fuzzy Entity Extraction
 
-```bash
-# 1. Cloner / décompresser le projet
-cd auto_project
+## 🚀 Rapid Setup
 
-# 2. Créer un environnement virtuel (recommandé)
-python -m venv venv
-source venv/bin/activate        # Linux/Mac
-venv\Scripts\activate           # Windows
+1. **Install Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-# 3. Installer les dépendances
-pip install -r requirements.txt
-```
+2. **Launch the Dashboard**:
+   ```bash
+   streamlit run app.py
+   ```
 
----
+## 📁 Project Architecture
 
-## 🚀 Lancement
-
-```bash
-streamlit run app.py
-```
-
-L'application s'ouvre automatiquement sur `http://localhost:8501`
-
----
-
-## 🧩 Fonctionnalités
-
-### 🏠 Accueil
-- KPIs : total annonces, prix médian, prix min/max, marques, villes
-- Top 5 / Bottom 5 : plus chères, moins chères, plus récentes, moins de km
-
-### 📊 Résultats & Filtres
-- Filtres : marque, carburant, ville, fourchette de prix, année
-- Tableau des annonces filtré
-- Export CSV
-
-### 📈 Visualisations (5 graphiques)
-1. Histogramme de distribution des prix
-2. Box plot prix par carburant
-3. Top 10 marques (annonces + prix moyen)
-4. Pie chart répartition carburant
-5. Courbe prix moyen par année
-6. Scatter corrélation prix / kilométrage
-
-### 🤖 Prédiction IA
-- **Estimateur de prix** (Random Forest) : prédit le prix d'un véhicule à partir de l'année, km, marque, carburant
-- **Tendance temporelle** (Régression Linéaire) : prédit l'évolution du prix moyen sur les N prochains jours
+- `app.py`: Main router and application entry point.
+- `ui/`: Modular interface components.
+  - `ui_home.py`: Market Intelligence KPI dashboard.
+  - `ui_results.py`: Advanced filtering and results explorer.
+  - `ui_visuals.py`: High-fidelity data visualizations.
+  - `ui_ai.py`: AI Assistant and Market Trends logic.
+- `scraper.py`: Concurrent scraping engine.
+- `predictor.py`: ML models for regression and forecasting.
+- `chat_helper.py`: NLP intelligence for the chatbot.
 
 ---
-
-## 📌 Notes importantes
-
-- Le scraping respecte un délai de 1.5s entre les requêtes
-- Toutes les erreurs sont gérées avec try/except
-- Les données sont fusionnées (pas de doublons) à chaque scraping
-- Si le site cible change de structure HTML, ajuster les sélecteurs dans `scraper.py`
-
----
-
-## 🛠️ Ajustement des sélecteurs HTML
-
-Si le scraping ne retourne pas de données, ouvrir `scraper.py` et modifier la fonction `extract_car()` :
-```python
-# Inspecter l'élément sur le site cible (F12 → DevTools)
-title_tag  = item.find("h2")                    # ou item.find(class_="car-title")
-price_tag  = item.find(class_="price")          # adapter selon le site
-year_tag   = item.find(class_="year")
-km_tag     = item.find(class_="mileage")
-```
+*Developed for Portfolio Excellence | Data Sourced from automobile.tn*

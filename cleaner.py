@@ -73,9 +73,9 @@ def extract_brand(title: str) -> str:
     for brand in KNOWN_BRANDS:
         if brand.lower() in title_lower:
             return brand
-    # Si non trouvé, prendre le premier mot
+    # If not found, take the first word
     words = str(title).split()
-    return words[0] if words else "Autre"
+    return words[0] if words else "Other"
 
 
 def clean_fuel(value: str) -> str:
@@ -84,20 +84,20 @@ def clean_fuel(value: str) -> str:
     if "diesel" in val or "gasoil" in val:
         return "Diesel"
     if "essence" in val or "sans plomb" in val:
-        return "Essence"
+        return "Gasoline"
     if "hybride" in val:
-        return "Hybride"
+        return "Hybrid"
     if "électr" in val or "electr" in val:
-        return "Électrique"
+        return "Electric"
     if "gpl" in val or "gaz" in val:
-        return "GPL"
-    return "Non précisé"
+        return "LPG"
+    return "Not specified"
 
 
 def clean_location(value: str) -> str:
     """Normalise la localisation (supprime espaces parasites)."""
     cleaned = re.sub(r"\s+", " ", str(value)).strip()
-    return cleaned if cleaned not in ("N/A", "", "nan") else "Non précisé"
+    return cleaned if cleaned not in ("N/A", "", "nan") else "Not specified"
 
 
 # ─── Pipeline principal ────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
-    print("🧹 Nettoyage des données…")
+    print("🧹 Cleaning data…")
     df = df.copy()
 
     # ── Colonnes numériques ──────────────────────────────────────────────────
@@ -132,11 +132,11 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     # ── Suppression des colonnes brutes ──────────────────────────────────────
     df.drop(columns=["price_raw", "year_raw", "km_raw"], errors="ignore", inplace=True)
 
-    # ── Suppression des doublons ─────────────────────────────────────────────
+    # ── Drop duplicates ─────────────────────────────────────────────
     before = len(df)
     df.drop_duplicates(subset=["title", "price"], inplace=True)
     after = len(df)
-    print(f"  → {before - after} doublon(s) supprimé(s)")
+    print(f"  → {before - after} duplicate(s) removed")
 
     # ── Réordonnancement des colonnes ────────────────────────────────────────
     cols_order = ["title", "brand", "year", "age", "price", "km", "fuel", "location", "link", "scraped_at"]
@@ -145,8 +145,8 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df[existing_cols + extra_cols]
 
     total_valid = df["price"].notna().sum()
-    print(f"  → {total_valid}/{len(df)} annonces avec prix valide")
-    print(f"✅ Nettoyage terminé — {len(df)} lignes propres\n")
+    print(f"  → {total_valid}/{len(df)} listings with valid price")
+    print(f"✅ Cleaning complete — {len(df)} clean rows\n")
     return df
 
 

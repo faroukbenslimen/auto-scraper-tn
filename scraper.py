@@ -10,8 +10,9 @@ from datetime import datetime
 from urllib.parse import urljoin
 
 import pandas as pd
+import requests
+import concurrent.futures
 from bs4 import BeautifulSoup
-from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.service import Service as EdgeService
@@ -37,6 +38,7 @@ EXPECTED_COLUMNS = [
     "fuel",
     "location",
     "link",
+    "image_url",
     "scraped_at",
 ]
 
@@ -83,13 +85,13 @@ def _setup_driver(headless: bool = True):
 
     # 1) Selenium Manager local auto-discovery (pas de dependency forte au réseau).
     try:
-        print("🌐 Navigateur Selenium: Chrome (Selenium Manager)")
+        print("🌐 Selenium Browser: Chrome (Selenium Manager)")
         return webdriver.Chrome(options=chrome_options)
     except Exception:
         pass
 
     try:
-        print("🌐 Navigateur Selenium: Edge (Selenium Manager)")
+        print("🌐 Selenium Browser: Edge (Selenium Manager)")
         return webdriver.Edge(options=edge_options)
     except Exception:
         pass
@@ -97,11 +99,11 @@ def _setup_driver(headless: bool = True):
     # 2) Fallback webdriver-manager si téléchargement autorisé.
     try:
         chrome_service = Service(ChromeDriverManager().install())
-        print("🌐 Navigateur Selenium: Chrome (webdriver-manager)")
+        print("🌐 Selenium Browser: Chrome (webdriver-manager)")
         return webdriver.Chrome(service=chrome_service, options=chrome_options)
     except Exception:
         edge_service = EdgeService(EdgeChromiumDriverManager().install())
-        print("🌐 Navigateur Selenium: Edge (webdriver-manager)")
+        print("🌐 Selenium Browser: Edge (webdriver-manager)")
         return webdriver.Edge(service=edge_service, options=edge_options)
 
 
@@ -226,6 +228,13 @@ def extract_car(card):
             if _looks_like_listing_link(href):
                 link = _normalize_link(href)
                 break
+                
+        image_url = "N/A"
+        img_tag = card.find("img")
+        if img_tag:
+            image_url = img_tag.get("src") or img_tag.get("data-src", "N/A")
+            if image_url != "N/A" and not image_url.startswith("http"):
+                image_url = urljoin(BASE_URL, image_url)
 
         return {
             "title": title,
@@ -235,10 +244,11 @@ def extract_car(card):
             "fuel": fuel,
             "location": location,
             "link": link,
+            "image_url": image_url,
             "scraped_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
     except Exception as e:
-        print(f"  ⚠️  Erreur extraction d'une annonce : {e}")
+        print(f"  ⚠️  Error extracting a listing : {e}")
         return None
 
 
@@ -284,99 +294,114 @@ def _extract_cards_from_html(html: str):
 
 # ─── Scraping paginé ──────────────────────────────────────────────────────────
 
+def scrape_single_page(page: int):
+    """Scrapes a single page and returns the parsed cards efficiently via HTTP."""
+    url = f"{SEARCH_URL}?page={page}"
+    try:
+        response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"})
+        if response.status_code != 200:
+            print(f"  ❌ Failed to load page {page} — Status {response.status_code}")
+            return []
+        
+        cards = _extract_cards_from_html(response.text)
+        page_cars = []
+        if cards:
+            for item in cards:
+                car = extract_car(item)
+                if car:
+                    page_cars.append(car)
+        return page, page_cars
+    except Exception as e:
+        print(f"  ❌ Error on page {page} : {e}")
+        return page, []
+
 def scrape_cars(num_pages: int = 5) -> pd.DataFrame:
     """
-    Parcourt `num_pages` pages d'annonces et retourne un DataFrame brut.
+    Parcourt `num_pages` pages d'annonces en multi-threading super-rapide.
     """
     all_cars = []
     seen_links = set()
-    print(f"🚗 Début du scraping — {num_pages} page(s)…\n")
+    print(f"🚀 Starting TURBO Scraping — {num_pages} page(s) over concurrent threads…\n")
 
-    driver = None
-    try:
-        driver = _setup_driver(headless=True)
-
-        for page in range(1, num_pages + 1):
-            url = f"{SEARCH_URL}?page={page}"
-            try:
-                driver.get(url)
-                WebDriverWait(driver, 20).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "body"))
-                )
-
-                # Attendre le rendu JS et la population des annonces.
-                time.sleep(2)
-
-                cards = _extract_cards_from_html(driver.page_source)
-                if not cards:
-                    print(f"  ℹ️  Aucune annonce détectée page {page} — arrêt pagination.")
-                    break
-
-                page_count = 0
-                for item in cards:
-                    car = extract_car(item)
-                    if not car:
-                        continue
-
+    # Utiliser 10-20 workers pour lancer les requêtes HTTP simultanément
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        futures = {executor.submit(scrape_single_page, p): p for p in range(1, num_pages + 1)}
+        
+        for future in concurrent.futures.as_completed(futures):
+            page, page_cars = future.result()
+            added_count = 0
+            if page_cars:
+                for car in page_cars:
                     link = car.get("link", "N/A")
-                    if link != "N/A" and link in seen_links:
-                        continue
-
-                    if link != "N/A":
+                    if link != "N/A" and link not in seen_links:
                         seen_links.add(link)
-                    all_cars.append(car)
-                    page_count += 1
-
-                print(
-                    f"  ✅ Page {page}/{num_pages} — {page_count} nouvelles annonces "
-                    f"({len(all_cars)} total)"
-                )
-
-                # Délai demandé entre pages.
-                time.sleep(2)
-
-            except Exception as e:
-                print(f"  ❌ Erreur page {page} : {e}")
-
-    except Exception as e:
-        print(f"  ❌ Impossible d'initialiser Selenium : {e}")
-    finally:
-        if driver:
-            driver.quit()
+                        all_cars.append(car)
+                        added_count += 1
+                print(f"  ✅ Thread {page}/{num_pages} finished — {added_count} new listings")
+            else:
+                print(f"  ℹ️ Thread {page}/{num_pages} — No listings detected.")
 
     df = pd.DataFrame(all_cars, columns=EXPECTED_COLUMNS)
-    print(f"\n📦 Scraping terminé — {len(df)} annonces collectées au total.")
+    print(f"\n📦 Scraping complete — {len(df)} listings collected in total.")
     return df
 
 
-# ─── Persistance CSV ──────────────────────────────────────────────────────────
+# ─── Persistance SQLite ────────────────────────────────────────────────────────
+import sqlite3
 
-def save_data(df: pd.DataFrame, filepath: str = DATA_PATH) -> pd.DataFrame:
-    """Sauvegarde le DataFrame (fusionne avec les données existantes)."""
+def save_data(df: pd.DataFrame, db_path: str = "data/cars.db") -> pd.DataFrame:
+    """Sauvegarde le DataFrame dans une base SQLite avec suivi historique."""
     os.makedirs("data", exist_ok=True)
 
     if df.empty:
-        print("⚠️  Aucune donnée à sauvegarder.")
+        print("⚠️  No data to save.")
         return df
 
-    if os.path.exists(filepath):
-        existing = pd.read_csv(filepath)
-        df = pd.concat([existing, df], ignore_index=True).drop_duplicates(
-            subset=["title", "price_raw", "link"], keep="last"
-        )
-
-    df.to_csv(filepath, index=False, encoding="utf-8-sig")
-    print(f"💾 Données sauvegardées → {filepath}  ({len(df)} lignes)")
-    return df
-
-
-def load_data(filepath: str = DATA_PATH) -> pd.DataFrame:
-    """Charge les données depuis le CSV."""
-    if os.path.exists(filepath):
-        df = pd.read_csv(filepath)
-        print(f"📂 Données chargées — {len(df)} lignes")
+    conn = sqlite3.connect(db_path)
+    try:
+        # Pre-process prices for history
+        df["price"] = pd.to_numeric(df["price_raw"].str.replace(r"[^\d]", "", regex=True), errors="coerce")
+        
+        # 1. Update Price History Table (Global Archive)
+        history_entry = df[["link", "price", "scraped_at"]].dropna(subset=["price"])
+        history_entry.to_sql("price_history", conn, if_exists="append", index=False)
+        
+        # 2. Update Main Cars Table (Latest Snapshot)
+        try:
+            existing = pd.read_sql("SELECT * FROM cars", conn)
+            df_merged = pd.concat([existing, df], ignore_index=True)
+            # We keep the LATEST scraping for each link to show the current state
+            df_merged = df_merged.drop_duplicates(subset=["link"], keep="last")
+            df_merged.to_sql("cars", conn, if_exists="replace", index=False)
+            print(f"💾 Data saved → {db_path}  ({len(df_merged)} unique listings)")
+            return df_merged
+        except Exception:
+            # Table doesn't exist yet
+            df.to_sql("cars", conn, if_exists="replace", index=False)
+            print(f"💾 Data initialized → {db_path}  ({len(df)} rows)")
+            return df
+            
+    except Exception as e:
+        print(f"❌ Database Error: {e}")
         return df
-    print("⚠️  Aucun fichier de données trouvé.")
+    finally:
+        conn.close()
+
+
+def load_data(db_path: str = "data/cars.db") -> pd.DataFrame:
+    """Charge les données depuis la base SQLite."""
+    if os.path.exists(db_path):
+        conn = sqlite3.connect(db_path)
+        try:
+            df = pd.read_sql("SELECT * FROM cars", conn)
+            print(f"📂 Data loaded — {len(df)} rows")
+            return df
+        except Exception:
+            pass
+        finally:
+            conn.close()
+            
+    print("⚠️  No database found.")
     return pd.DataFrame()
 
 

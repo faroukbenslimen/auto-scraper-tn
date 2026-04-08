@@ -89,48 +89,48 @@ def top5_low_km(df: pd.DataFrame) -> pd.DataFrame:
 # ─── Distributions ────────────────────────────────────────────────────────────
 
 def by_brand(df: pd.DataFrame) -> pd.DataFrame:
-    """Nombre d'annonces et prix moyen par marque."""
+    """Number of listings and avg price per brand."""
     return (
         df.groupby("brand")
         .agg(
-            nb_annonces=("title", "count"),
-            prix_moyen=("price", lambda x: round(x.mean(), 0)),
-            km_moyen=("km", lambda x: round(x.mean(), 0)),
+            num_listings=("title", "count"),
+            avg_price=("price", lambda x: round(x.mean(), 0)),
+            avg_km=("km", lambda x: round(x.mean(), 0)),
         )
-        .sort_values("nb_annonces", ascending=False)
+        .sort_values("num_listings", ascending=False)
         .reset_index()
     )
 
 
 def by_fuel(df: pd.DataFrame) -> pd.DataFrame:
-    """Répartition par type de carburant."""
+    """Distribution by fuel type."""
     return (
         df.groupby("fuel")
-        .agg(nb_annonces=("title", "count"), prix_moyen=("price", "mean"))
-        .sort_values("nb_annonces", ascending=False)
+        .agg(num_listings=("title", "count"), avg_price=("price", "mean"))
+        .sort_values("num_listings", ascending=False)
         .reset_index()
     )
 
 
 def by_location(df: pd.DataFrame) -> pd.DataFrame:
-    """Répartition par ville / région."""
+    """Distribution by location/region."""
     return (
         df.groupby("location")
-        .agg(nb_annonces=("title", "count"), prix_moyen=("price", "mean"))
-        .sort_values("nb_annonces", ascending=False)
+        .agg(num_listings=("title", "count"), avg_price=("price", "mean"))
+        .sort_values("num_listings", ascending=False)
         .head(15)
         .reset_index()
     )
 
 
 def by_year(df: pd.DataFrame) -> pd.DataFrame:
-    """Prix moyen par année de fabrication."""
+    """Average price by manufacturing year."""
     return (
         df.dropna(subset=["year", "price"])
         .groupby("year")
         .agg(
-            nb_annonces=("title", "count"),
-            prix_moyen=("price", lambda x: round(x.mean(), 0)),
+            num_listings=("title", "count"),
+            avg_price=("price", lambda x: round(x.mean(), 0)),
         )
         .sort_values("year")
         .reset_index()
@@ -138,26 +138,26 @@ def by_year(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def price_distribution_bins(df: pd.DataFrame, bins: int = 10) -> pd.DataFrame:
-    """Distribution des prix par tranches."""
+    """Distribution of prices by tiers."""
     prices = df["price"].dropna()
     if prices.empty:
         return pd.DataFrame()
     cut, labels = pd.cut(prices, bins=bins, retbins=True)
     result = cut.value_counts().sort_index().reset_index()
-    result.columns = ["tranche_prix", "nb_annonces"]
-    result["tranche_prix"] = result["tranche_prix"].astype(str)
+    result.columns = ["price_tier", "num_listings"]
+    result["price_tier"] = result["price_tier"].astype(str)
     return result
 
 
 # ─── Résumé complet ───────────────────────────────────────────────────────────
 
 def full_summary(df: pd.DataFrame) -> dict:
-    """Génère un rapport d'analyse complet."""
+    """Generates a complete analysis report."""
     return {
-        "total_annonces":    len(df),
-        "avec_prix":         int(df["price"].notna().sum()),
-        "marques_uniques":   int(df["brand"].nunique()),
-        "villes_uniques":    int(df["location"].nunique()),
+        "total_listings":    len(df),
+        "with_price":        int(df["price"].notna().sum()),
+        "unique_brands":     int(df["brand"].nunique()),
+        "unique_villes":     int(df["location"].nunique()),
         "price_stats":       get_price_stats(df),
         "km_stats":          get_km_stats(df),
         "year_stats":        get_year_stats(df),
