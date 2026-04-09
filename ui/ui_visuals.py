@@ -135,6 +135,7 @@ def render_visuals_page(df):
             labels={"km": "Mileage (km)", "price": "Price (DT)", "year": "Year"},
             color_continuous_scale=["#b300ff", "#e94560", "#00d4ff"],
             opacity=0.7,
+            render_mode="webgl"
         )
         fig_scatter.update_traces(marker=dict(size=8))
         fig_scatter.update_layout(plot_bgcolor="rgba(0,0,0,0)")

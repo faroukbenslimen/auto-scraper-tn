@@ -16,15 +16,28 @@ def clean_price(value: str) -> float:
     try:
         if pd.isna(value) or str(value).strip() in ("N/A", "", "-"):
             return np.nan
-        # Supprimer tout sauf chiffres et séparateurs
-        cleaned = re.sub(r"[^\d.,]", "", str(value))
+        # Replace common Tunisian price formatting artifacts
+        cleaned = str(value).upper().replace("DT", "").replace("TND", "").replace("DINARS", "")
+        cleaned = re.sub(r"[^\d.,]", "", cleaned)
+        
         # Gérer le format européen (15.000,00) vs anglais (15,000.00)
         if "," in cleaned and "." in cleaned:
-            cleaned = cleaned.replace(".", "").replace(",", ".")
+            # Assume last separator is decimal if its 2 digits, otherwise ignore
+            parts = cleaned.split(".")
+            if len(parts[-1]) == 2:
+                cleaned = cleaned.replace(",", "").replace(".", ".")
+            else:
+                cleaned = cleaned.replace(".", "").replace(",", "")
         elif "," in cleaned:
-            cleaned = cleaned.replace(",", "")
-        elif "." in cleaned and len(cleaned.split(".")[-1]) == 3:
-            cleaned = cleaned.replace(".", "")
+            # In Tunisia, "," is often a decimal for millimes or just a thousands separator
+            if len(cleaned.split(",")[-1]) == 3: # Thousands
+                cleaned = cleaned.replace(",", "")
+            else: # Decimal
+                cleaned = cleaned.replace(",", ".")
+        elif "." in cleaned:
+            if len(cleaned.split(".")[-1]) == 3: # Thousands
+                cleaned = cleaned.replace(".", "")
+        
         return float(cleaned) if cleaned else np.nan
     except Exception:
         return np.nan
@@ -67,7 +80,10 @@ def extract_brand(title: str) -> str:
         "Toyota", "Volkswagen", "Peugeot", "Renault", "Citroën", "Citroen",
         "Ford", "BMW", "Mercedes", "Audi", "Hyundai", "Kia", "Seat",
         "Opel", "Fiat", "Nissan", "Suzuki", "Skoda", "Dacia", "Honda",
-        "Mitsubishi", "Mazda", "Chevrolet", "Jeep", "Land Rover",
+        "Mitsubishi", "Mazda", "Chevrolet", "Jeep", "Land Rover", "Range Rover",
+        "Alfa Romeo", "Lancia", "Ssangyong", "Mahindra", "Isuzu", "Chery",
+        "MG", "Haval", "Dongfeng", "Geely", "Baic", "Great Wall", "Porsche",
+        "Jaguar", "Volvo", "Mini", "Smart", "Iveco", "Chery"
     ]
     title_lower = str(title).lower()
     for brand in KNOWN_BRANDS:

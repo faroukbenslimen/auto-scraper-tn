@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
-from ui_utils import render_styled_table
+from .ui_utils import render_styled_table
 
 def render_results_page(df):
     st.title("📊 Market Listings Explorer")
@@ -82,7 +82,13 @@ def render_results_page(df):
         info = price_info.get(row["link"])
         if info:
             return f"📉 Price Drop!\n(-{info['saved']:,} DT)"
-        return "✨ New Listing" if row["scraped_at"][:10] == pd.Timestamp.today().strftime("%Y-%m-%d") else "🔹 Stable"
+        
+        # Check against today's date
+        is_today = str(row["scraped_at"])[:10] == pd.Timestamp.today().strftime("%Y-%m-%d")
+        if is_today:
+            return "✨ New Listing"
+            
+        return "🔹 Stable"
 
     filtered["Market Status"] = filtered.apply(get_market_badge, axis=1)
 

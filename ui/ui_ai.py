@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from predictor import CarPricePredictor, PriceTrendPredictor
-from ui_utils import render_styled_table
+from .ui_utils import render_styled_table
 
 def render_ai_page(df):
     st.title("🤖 AI Intelligence Hub")
@@ -19,8 +19,14 @@ def render_ai_page(df):
         st.subheader("💬 Market Intelligence Assistant")
         st.info("Ask the AI anything about your data. Examples:\n- *'Estimate a 2018 Golf with 50k km'*\n- *'What is the cheapest Audi?'*\n- *'Average price of 2020 Peugeot'*\n- *'How many listings in Sousse?'*")
 
-        predictor = CarPricePredictor()
-        metrics = predictor.train(df)
+        @st.cache_resource
+        def get_trained_predictor(_df):
+            p = CarPricePredictor()
+            p.train(_df)
+            return p
+            
+        predictor = get_trained_predictor(df)
+        metrics = predictor.metrics
 
         if "messages" not in st.session_state:
             st.session_state.messages = []
@@ -52,6 +58,18 @@ def render_ai_page(df):
             for k, v in extracted.items():
                 if v is not None:
                     st.session_state.car_context[k] = v
+
+            # --- BRAND INFERENCE LOGIC ---
+            if st.session_state.car_context["brand"] is None and st.session_state.car_context["model"] is not None:
+                model_name = st.session_state.car_context["model"]
+                # Search for the most common brand for this title in the dataset
+                inferred_brand = df[df["title"] == model_name]["brand"].mode()
+                if not inferred_brand.empty:
+                    st.session_state.car_context["brand"] = inferred_brand.iloc[0]
+                    # Tag this as an assumption later
+                    if "inferred_brand" not in st.session_state: st.session_state.inferred_brand = True
+            else:
+                st.session_state.inferred_brand = False
 
             ctx = st.session_state.car_context
 
@@ -105,12 +123,20 @@ def render_ai_page(df):
                     st.session_state.messages.append({"role": "assistant", "content": response_text})
                     st.session_state.car_context = {"year": None, "km": None, "brand": None, "fuel": None, "model": None}
                 else:
-                    if not ctx["brand"]:
+                    if not ctx["brand"] and not ctx["model"]:
                         response = "I need a **brand** or **model** to perform an AI estimation. What are you looking for?"
                         st.markdown(response)
                         st.session_state.messages.append({"role": "assistant", "content": response})
                     else:
                         assumptions_made = []
+                        if st.session_state.get("inferred_brand"):
+                            assumptions_made.append(f"Brand: **{ctx['brand']}**")
+                        
+                        if not ctx["brand"]:
+                            # Fallback if inference failed but model exists
+                            ctx["brand"] = "Volkswagen" # Default fallback for the region if totally unknown
+                            assumptions_made.append(f"Brand: **{ctx['brand']}** (Estimated)")
+
                         if not ctx["year"]:
                             brand_data = df[df["brand"] == ctx["brand"]]
                             ctx["year"] = int(brand_data["year"].median()) if not brand_data.empty else 2019
@@ -147,18 +173,27 @@ def render_ai_page(df):
                             st.session_state.car_context = {"year": None, "km": None, "brand": None, "fuel": None, "model": None}
 
         with st.expander("⚙️ Advanced AI Metrics"):
-            if "error" not in metrics:
+            if "error" not in metrics and metrics.get("train_size", 0) > 0:
                 c1, c2, c3 = st.columns(3)
-                c1.metric("MAE", f"{int(metrics.get('mae', 0)):,} DT")
+                mae = metrics.get('mae', 0)
+                mae_str = f"{int(mae):,} DT" if mae > 0 else "—"
+                c1.metric("MAE", mae_str)
                 c2.metric("R² Score", f"{metrics.get('r2', 0):.3f}")
                 c3.metric("Dataset Size", f"{metrics.get('train_size', 0)}")
+            else:
+                st.info("Train the model with more data to see accuracy metrics.")
 
     # ── Onglet 2 : Tendance temporelle ────────────────────────────────────────
     with tab2:
         st.subheader("📉 Market Forecasting")
         days = st.slider("Forecast Horizon (Days)", 7, 30, 14)
-        m = PriceTrendPredictor()
-        m.train(df)
+        @st.cache_resource
+        def get_trained_trend_model(_df):
+            m = PriceTrendPredictor()
+            m.train(_df)
+            return m
+            
+        m = get_trained_trend_model(df)
         f_df = m.get_full_history_with_prediction(days=days)
         h_df, p_df = f_df[f_df["type"]=="History"], f_df[f_df["type"]=="Prediction"]
 

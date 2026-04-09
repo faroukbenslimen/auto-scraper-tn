@@ -13,16 +13,6 @@ import pandas as pd
 import requests
 import concurrent.futures
 from bs4 import BeautifulSoup
-from selenium.common.exceptions import WebDriverException
-from selenium.webdriver.edge.options import Options as EdgeOptions
-from selenium.webdriver.edge.service import Service as EdgeService
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.microsoft import EdgeChromiumDriverManager
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -43,69 +33,6 @@ EXPECTED_COLUMNS = [
 ]
 
 # ─── Extraction d'une annonce ──────────────────────────────────────────────────
-
-def _setup_driver(headless: bool = True):
-    """Crée un navigateur Selenium avec fallback Chrome -> Edge (Windows)."""
-    ua = (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    )
-
-    chrome_options = Options()
-    if headless:
-        chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--lang=fr-FR")
-    chrome_options.add_argument(f"--user-agent={ua}")
-
-    # Aide Selenium à trouver chrome sur Windows si installé hors PATH.
-    possible_chrome_paths = [
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-    ]
-    for path in possible_chrome_paths:
-        if path and os.path.exists(path):
-            chrome_options.binary_location = path
-            break
-
-    edge_options = EdgeOptions()
-    if headless:
-        edge_options.add_argument("--headless=new")
-    edge_options.add_argument("--disable-gpu")
-    edge_options.add_argument("--no-sandbox")
-    edge_options.add_argument("--disable-dev-shm-usage")
-    edge_options.add_argument("--window-size=1920,1080")
-    edge_options.add_argument("--lang=fr-FR")
-    edge_options.add_argument(f"--user-agent={ua}")
-
-    # 1) Selenium Manager local auto-discovery (pas de dependency forte au réseau).
-    try:
-        print("🌐 Selenium Browser: Chrome (Selenium Manager)")
-        return webdriver.Chrome(options=chrome_options)
-    except Exception:
-        pass
-
-    try:
-        print("🌐 Selenium Browser: Edge (Selenium Manager)")
-        return webdriver.Edge(options=edge_options)
-    except Exception:
-        pass
-
-    # 2) Fallback webdriver-manager si téléchargement autorisé.
-    try:
-        chrome_service = Service(ChromeDriverManager().install())
-        print("🌐 Selenium Browser: Chrome (webdriver-manager)")
-        return webdriver.Chrome(service=chrome_service, options=chrome_options)
-    except Exception:
-        edge_service = EdgeService(EdgeChromiumDriverManager().install())
-        print("🌐 Selenium Browser: Edge (webdriver-manager)")
-        return webdriver.Edge(service=edge_service, options=edge_options)
-
 
 def _extract_first_text(tag, selectors):
     for selector in selectors:
@@ -348,6 +275,41 @@ def scrape_cars(num_pages: int = 5) -> pd.DataFrame:
 
 # ─── Persistance SQLite ────────────────────────────────────────────────────────
 import sqlite3
+import json
+
+def get_last_sync_time(meta_path: str = "data/metadata.json") -> dict:
+    """Récupère l'état complet de la synchronisation (temps + lock)."""
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r") as f:
+                data = json.load(f)
+                dt = datetime.fromisoformat(data.get("last_sync")) if data.get("last_sync") else datetime.min
+                return {"last_sync": dt, "is_syncing": data.get("is_syncing", False)}
+        except Exception:
+            pass
+    return {"last_sync": datetime.min, "is_syncing": False}
+
+def set_sync_lock(status: bool, meta_path: str = "data/metadata.json"):
+    """Active ou désactive le verrou de synchronisation globale."""
+    os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+    data = {"last_sync": datetime.min.isoformat(), "is_syncing": status}
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r") as f:
+                data = json.load(f)
+        except Exception:
+            pass
+    
+    data["is_syncing"] = status
+    if not status: # If we are unlocking, we usually just finished a sync
+        data["last_sync"] = datetime.now().isoformat()
+
+    with open(meta_path, "w") as f:
+        json.dump(data, f)
+
+def update_last_sync_time(meta_path: str = "data/metadata.json"):
+    """Met à jour l'horodatage de la synchronisation et libère le verrou."""
+    set_sync_lock(False, meta_path)
 
 def save_data(df: pd.DataFrame, db_path: str = "data/cars.db") -> pd.DataFrame:
     """Sauvegarde le DataFrame dans une base SQLite avec suivi historique."""
@@ -374,11 +336,13 @@ def save_data(df: pd.DataFrame, db_path: str = "data/cars.db") -> pd.DataFrame:
             df_merged = df_merged.drop_duplicates(subset=["link"], keep="last")
             df_merged.to_sql("cars", conn, if_exists="replace", index=False)
             print(f"💾 Data saved → {db_path}  ({len(df_merged)} unique listings)")
+            update_last_sync_time()
             return df_merged
         except Exception:
             # Table doesn't exist yet
             df.to_sql("cars", conn, if_exists="replace", index=False)
             print(f"💾 Data initialized → {db_path}  ({len(df)} rows)")
+            update_last_sync_time()
             return df
             
     except Exception as e:

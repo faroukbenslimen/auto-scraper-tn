@@ -9,15 +9,17 @@ import os
 import time
 
 # 1. Imports from our modular UI system
-from ui_utils import detect_dark_mode, setup_plotly_theme, apply_custom_css
-from ui_home import render_home_page
-from ui_results import render_results_page
-from ui_visuals import render_visuals_page
-from ui_ai import render_ai_page
+from ui.ui_home import render_home_page
+from ui.ui_results import render_results_page
+from ui.ui_visuals import render_visuals_page
+from ui.ui_ai import render_ai_page
+from ui.ui_utils import detect_dark_mode, setup_plotly_theme, apply_custom_css
 
 # 2. Project Engine Imports
-from scraper import scrape_cars, save_data, load_data
+from scraper import scrape_cars, save_data, load_data, get_last_sync_time
 from cleaner import clean_dataframe
+import threading
+from datetime import datetime
 
 # ─── Initialization & Theme ───────────────────────────────────────────────────
 is_dark = detect_dark_mode()
@@ -78,8 +80,8 @@ def on_nav_change():
     st.query_params["page"] = st.session_state.nav_radio
 
 with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/6/68/Flag_of_Tunisia.svg/32px-Flag_of_Tunisia.svg.png", width=30)
-    st.title("🚗 Auto Scraper TN")
+    # Use a more reliable flag source or an emoji to avoid broken icons
+    st.markdown("### 🇹🇳 Auto Scraper TN")
     st.markdown("---")
     
     nav_options = {
@@ -136,28 +138,59 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    st.caption("Auto Market Intelligence v2.0\nSource: automobile.tn")
+    # Show last sync info
+    from scraper import get_last_sync_time
+    sync_status = get_last_sync_time()
+    ls = sync_status["last_sync"]
+    ls_str = ls.strftime("%Y-%m-%d %H:%M") if ls != datetime.min else "Never"
+    st.caption(f"🕒 Last Full Sync: {ls_str}")
+    if sync_status["is_syncing"]:
+        st.caption("🔄 **Sync in progress...**")
+    st.caption("Auto Market Intelligence v2.2\nSource: automobile.tn")
 
 # ─── Main Page Routing ───────────────────────────────────────────────────────
 df = get_cached_data()
 
-# 🛡️ 3. Private Power-User: Startup Auto-Sync
-if "startup_sync_done" not in st.session_state:
-    st.session_state.startup_sync_done = False
-
-if not st.session_state.startup_sync_done:
-    st.toast("🔄 Proactive Market Sync: Checking for new listings...", icon="🔍")
+# 🛡️ 3. Private Power-User: Background Auto-Sync (6-Hour Rule)
+def background_sync_task():
+    """Background task to scrape 150 pages and update the model."""
+    from scraper import set_sync_lock
     try:
-        # Perform a quick 5-page background sync on launch
-        new_raw = scrape_cars(num_pages=5)
+        set_sync_lock(True) # Set global lock
+        # 1. Full Depth Scrape
+        new_raw = scrape_cars(num_pages=150)
         if not new_raw.empty:
+            # 2. Persist (this also unlocks and updates time)
             save_data(new_raw)
-            refresh_app_data()
-            st.toast("✅ Market data updated!", icon="✨")
+            # 3. Cache refresh
+            st.cache_data.clear()
+            # 4. Success Toast (Will show on next app interaction)
+            st.session_state.sync_finished_at = datetime.now().strftime("%H:%M")
+        else:
+            set_sync_lock(False) # Unlock if empty
     except Exception as e:
-        st.toast(f"⚠️ Startup Sync failed: {e}")
-    st.session_state.startup_sync_done = True
-    st.rerun()
+        print(f"Background Sync Failed: {e}")
+        set_sync_lock(False) # Ensure unlock on error
+
+sync_status = get_last_sync_time()
+last_sync = sync_status["last_sync"]
+is_syncing_globally = sync_status["is_syncing"]
+hours_since = (datetime.now() - last_sync).total_seconds() / 3600
+
+if "sync_thread_started" not in st.session_state:
+    st.session_state.sync_thread_started = False
+
+# Only start if data is old AND no one else is currently syncing
+if hours_since >= 6 and not st.session_state.sync_thread_started and not is_syncing_globally:
+    st.toast("🌍 Deep Market Crawl (150 Pages) started in background...", icon="🔍")
+    thread = threading.Thread(target=background_sync_task, daemon=True)
+    thread.start()
+    st.session_state.sync_thread_started = True
+
+# Notify if sync just finished
+if "sync_finished_at" in st.session_state:
+    st.toast(f"✅ Market intelligence updated at {st.session_state.sync_finished_at}!", icon="✨")
+    del st.session_state.sync_finished_at
 
 if page == "🏠 Home":
     render_home_page(df)

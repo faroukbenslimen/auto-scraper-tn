@@ -127,7 +127,7 @@ def render_styled_table(df, paginate=False, page_size=20, table_id="default_tabl
         display_df = display_df.rename(columns=rename_cols)
         if "Photo" in display_df.columns:
             display_df["Photo"] = display_df["Photo"].apply(
-                lambda url: f'<img src="{url}" width="85" style="border-radius:6px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">' 
+                lambda url: f'<img src="{url}" width="85" style="border-radius:6px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);" onerror="this.style.display=\'none\';">' 
                 if pd.notnull(url) and str(url).startswith("http") else ""
             )
         for col in ["Year", "Price", "Mileage", "Predicted Price (DT)"]:

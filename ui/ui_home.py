@@ -1,6 +1,9 @@
 import streamlit as st
 import pandas as pd
-from analyzer import full_summary
+from analyzer import full_summary, find_market_bargains
+from predictor import CarPricePredictor
+import numpy as np
+from .ui_utils import render_styled_table
 
 def render_home_page(df):
     if df.empty:
@@ -24,16 +27,18 @@ def render_home_page(df):
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
+        val = summary.get('total_listings', 0)
+        val_str = f"{val}" if val > 0 else "—"
         st.markdown(f"""<div class="metric-card">
-            <div class="metric-value">{summary.get('total_listings', 0)}</div>
+            <div class="metric-value">{val_str}</div>
             <div class="metric-label">Live Listings</div></div>""", unsafe_allow_html=True)
     with col2:
-        val = f"{int(ps.get('median', 0)):,} DT" if ps else "—"
+        val = f"{int(ps.get('median', 0)):,} DT" if ps and ps.get('median', 0) > 0 else "—"
         st.markdown(f"""<div class="metric-card">
             <div class="metric-value">{val}</div>
             <div class="metric-label">Market Value (Median)</div></div>""", unsafe_allow_html=True)
     with col3:
-        val = f"{int(ps.get('min', 0)):,} DT" if ps else "—"
+        val = f"{int(ps.get('min', 0)):,} DT" if ps and ps.get('min', 0) > 0 else "—"
         st.markdown(f"""<div class="metric-card">
             <div class="metric-value">{val}</div>
             <div class="metric-label">Best Entry Price</div></div>""", unsafe_allow_html=True)
@@ -47,8 +52,10 @@ def render_home_page(df):
     col5, col6, col7, col8 = st.columns(4)
     
     with col5:
+        val = summary.get('unique_brands', 0)
+        val_str = f"{val}" if val > 0 else "—"
         st.markdown(f"""<div class="metric-card">
-            <div class="metric-value">{summary.get('unique_brands', 0)}</div>
+            <div class="metric-value">{val_str}</div>
             <div class="metric-label">Manufacturers</div></div>""", unsafe_allow_html=True)
     with col6:
         val = f"{int(ys.get('newest', 0))}" if ys else "—"
@@ -68,20 +75,44 @@ def render_home_page(df):
             <div class="metric-label">Market Leader</div></div>""", unsafe_allow_html=True)
 
     st.markdown("---")
+
+    # ── 🔥 AI Market Bargains ──────────────────────────────────────────
+    st.subheader("🔥 Top Market Bargains (AI Verified)")
+    st.markdown("These listings are currently priced at least **15% below** our AI's estimated market value.")
     
-    # ── Quick Tips / AI Insight ──────────────────────────────────────────────────
-    st.subheader("💡 Market Context")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.info(f"**Insight**: The {top_brand} remains the most listed brand in this snapshot. If you're looking for liquidity, it's a safe bet.")
-    with c2:
-        if ps and ps.get('median', 0) > 0:
-            st.success(f"**Pricing**: Half of the vehicles listed are under **{int(ps.get('median', 0)):,} DT**. Great opportunities for budget buyers!")
+    # Initialize and train predictor once
+    @st.cache_resource
+    def get_trained_predictor(_df):
+        p = CarPricePredictor()
+        p.train(_df)
+        return p
+    
+    predictor = get_trained_predictor(df)
+    
+    if predictor.is_trained:
+        bargains = find_market_bargains(df, predictor, threshold=0.15)
+        
+        if not bargains.empty:
+            # Show top 5 bargains
+            display_bargains = bargains.head(5).copy()
+            # Format the output for better reading
+            display_bargains["Saving"] = (display_bargains["savings_pct"] * 100).apply(lambda x: f"🔥 {x:.1f}% OFF")
+            display_bargains["AI Fair Price"] = display_bargains["predicted_price"].apply(lambda x: f"{int(x):,} DT")
+            display_bargains["Market Price"] = display_bargains["price"].apply(lambda x: f"{int(x):,} DT")
+            
+            # Reorder
+            cols_to_show = ["image_url", "title", "Market Price", "AI Fair Price", "Saving", "link"]
+            render_styled_table(display_bargains[cols_to_show], table_id="market_bargains")
+            
+            st.success("💡 **Intelligence Tip**: The items above represent the highest statistical value in the dataset based on current trends.")
+        else:
+            st.info("No major bargains detected at a 15% threshold. Most listings are priced close to market value.")
+    else:
+        st.warning("AI model still maturing. Bargain detection will be available once more data is collected.")
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.subheader("🏁 Market Extremes")
     
-    from ui_utils import render_styled_table
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("💰 Most Expensive")
