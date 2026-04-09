@@ -48,3 +48,9 @@ logs/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Local docs to keep private
+Projet Python.pdf
+implementation_plan.md
+new.md
+
