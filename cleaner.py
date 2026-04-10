@@ -120,49 +120,97 @@ def clean_location(value: str) -> str:
 
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Applique le pipeline de nettoyage complet sur le DataFrame brut.
-    Retourne un DataFrame propre avec des colonnes typées.
+    Apply the full cleaning pipeline to raw scraped data.
+    
+    Fast-path: If the data is already clean (loaded from DB with numeric price/year/km
+    and no raw columns), skip the expensive apply() operations entirely.
     """
     if df.empty:
         return df
 
-    print("🧹 Cleaning data…")
     df = df.copy()
+    is_already_clean = (
+        "price" in df.columns
+        and pd.api.types.is_numeric_dtype(df["price"])
+        and df["price"].notna().mean() > 0.7  # at least 70% have valid prices
+    )
 
-    # ── Colonnes numériques ──────────────────────────────────────────────────
+    if is_already_clean:
+        # ── Fast path: data from DB ──────────────────────────────────────────
+        # Price is already numeric. Extract year/km with fast vectorized regex
+        # instead of the slow row-by-row apply() calls.
+
+        if "year" not in df.columns and "year_raw" in df.columns:
+            # Vectorized year extraction — single regex pass on the whole column
+            df["year"] = pd.to_numeric(
+                df["year_raw"].astype(str).str.extract(r"(19[89]\d|20[012]\d)")[0],
+                errors="coerce"
+            )
+
+        if "km" not in df.columns and "km_raw" in df.columns:
+            # Vectorized km extraction — strip non-digits, convert to float
+            df["km"] = pd.to_numeric(
+                df["km_raw"].astype(str).str.replace(r"[^\d]", "", regex=True),
+                errors="coerce"
+            )
+
+        if "brand" not in df.columns and "title" in df.columns:
+            df["brand"] = df["title"].apply(extract_brand)
+
+        current_year = 2025
+        if "year" in df.columns and "age" not in df.columns:
+            df["age"] = pd.to_numeric(current_year - df["year"], errors="coerce")
+            df.loc[~df["age"].between(0, 60), "age"] = np.nan
+
+        if "fuel" in df.columns:
+            df["fuel"] = df["fuel"].apply(clean_fuel)
+        if "location" in df.columns:
+            df["location"] = df["location"].apply(clean_location)
+
+        # Drop raw columns (they're no longer needed)
+        df.drop(columns=["price_raw", "year_raw", "km_raw"], errors="ignore", inplace=True)
+
+        before = len(df)
+        df.drop_duplicates(subset=["title", "price"], inplace=True)
+        removed = before - len(df)
+        if removed:
+            print(f"  [Cleaner] Fast path: removed {removed} duplicate(s)")
+
+        cols_order = ["title", "brand", "year", "age", "price", "km", "fuel",
+                      "location", "link", "scraped_at", "image_url"]
+        existing = [c for c in cols_order if c in df.columns]
+        extra = [c for c in df.columns if c not in existing]
+        df = df[existing + extra]
+        print(f"  [Cleaner] Fast path complete — {len(df)} rows")
+        return df
+
+
+    # ── Full cleaning path: raw scraped data ────────────────────────────────
+    print("[Cleaner] Running full pipeline...")
     df["price"]    = df["price_raw"].apply(clean_price)
     df["year"]     = df["year_raw"].apply(clean_year)
     df["km"]       = df["km_raw"].apply(clean_km)
-
-    # ── Colonnes catégorielles ───────────────────────────────────────────────
     df["brand"]    = df["title"].apply(extract_brand)
     df["fuel"]     = df["fuel"].apply(clean_fuel)
     df["location"] = df["location"].apply(clean_location)
 
-    # ── Colonne âge du véhicule ──────────────────────────────────────────────
     current_year = 2025
     df["age"] = current_year - df["year"]
-    df.loc[df["age"] < 0, "age"] = np.nan
-    df.loc[df["age"] > 60, "age"] = np.nan
+    df.loc[~df["age"].between(0, 60), "age"] = np.nan
 
-    # ── Suppression des colonnes brutes ──────────────────────────────────────
     df.drop(columns=["price_raw", "year_raw", "km_raw"], errors="ignore", inplace=True)
 
-    # ── Drop duplicates ─────────────────────────────────────────────
     before = len(df)
     df.drop_duplicates(subset=["title", "price"], inplace=True)
-    after = len(df)
-    print(f"  → {before - after} duplicate(s) removed")
+    print(f"  [Cleaner] Removed {before - len(df)} duplicate(s)")
 
-    # ── Réordonnancement des colonnes ────────────────────────────────────────
-    cols_order = ["title", "brand", "year", "age", "price", "km", "fuel", "location", "link", "scraped_at"]
-    existing_cols = [c for c in cols_order if c in df.columns]
-    extra_cols = [c for c in df.columns if c not in existing_cols]
-    df = df[existing_cols + extra_cols]
+    cols_order = ["title", "brand", "year", "age", "price", "km", "fuel", "location", "link", "scraped_at", "image_url"]
+    existing = [c for c in cols_order if c in df.columns]
+    extra = [c for c in df.columns if c not in existing]
+    df = df[existing + extra]
 
-    total_valid = df["price"].notna().sum()
-    print(f"  → {total_valid}/{len(df)} listings with valid price")
-    print(f"✅ Cleaning complete — {len(df)} clean rows\n")
+    total_valid = int(df["price"].notna().sum())
+    print(f"  [Cleaner] {total_valid}/{len(df)} with valid price — complete")
     return df
 
 

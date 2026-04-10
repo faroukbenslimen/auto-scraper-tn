@@ -174,41 +174,40 @@ def full_summary(df: pd.DataFrame) -> dict:
 
 def find_market_bargains(df: pd.DataFrame, predictor, threshold: float = 0.15) -> pd.DataFrame:
     """
-    Identifie les annonces dont le prix est significativement inférieur à l'estimation IA.
-    Retourne les top deals avec le pourcentage d'économie estimé.
+    Identify listings priced significantly below their AI-estimated fair value.
+    Returns top bargains sorted by savings percentage.
     """
     if not predictor or not predictor.is_trained or df.empty:
         return pd.DataFrame()
 
     try:
-        # Pre-filter: only rows with full data
         required = ["price", "year", "km", "brand", "fuel", "location"]
         data = df.dropna(subset=required).copy()
-        
+        data = data[data["price"] > 0]
+
         if data.empty:
             return pd.DataFrame()
 
-        # Prepare for bulk prediction
-        X = predictor._encode(data[predictor.feature_names], fit=False)
-        
-        # Bulk predict in log scale then revert
-        log_preds = predictor.model.predict(X)
-        predicted_prices = np.expm1(log_preds)
-        
-        data["predicted_price"] = predicted_prices.round(0)
-        data["savings_dt"] = (data["predicted_price"] - data["price"]).astype(int)
-        data["savings_pct"] = (data["savings_dt"] / data["predicted_price"])
-        
-        # Target: Price is at least 'threshold' lower than predicted
-        bargains = data[data["savings_pct"] >= threshold].copy()
-        
-        # Sort by total savings percentage
-        bargains = bargains.sort_values("savings_pct", ascending=False)
-        
-        return bargains[["title", "brand", "year", "price", "predicted_price", "savings_pct", "link", "image_url"]]
+        # Use the fast bulk_predict() method (no internal re-encoding)
+        predicted_prices = predictor.bulk_predict(data)
+
+        data = data.loc[data.index]  # ensure alignment
+        data["predicted_price"] = np.round(predicted_prices, 0)
+        data["savings_dt"]  = (data["predicted_price"] - data["price"]).astype(int)
+        data["savings_pct"] = data["savings_dt"] / data["predicted_price"].clip(lower=1)
+
+        bargains = (
+            data[data["savings_pct"] >= threshold]
+            .sort_values("savings_pct", ascending=False)
+        )
+
+        return bargains[["title", "brand", "year", "price", "predicted_price",
+                          "savings_pct", "link", "image_url"]]
+
     except Exception as e:
-        print(f"⚠️  Error in bargain hunting: {e}")
+        print(f"  [Bargains] Error: {e}")
         return pd.DataFrame()
+
 
 
 if __name__ == "__main__":

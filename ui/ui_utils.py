@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import os
-import plotly.io as pio
 
 def detect_dark_mode():
     config_path = os.path.join(".streamlit", "config.toml")
@@ -11,6 +10,7 @@ def detect_dark_mode():
     return True
 
 def setup_plotly_theme(is_dark):
+    import plotly.io as pio
     if is_dark:
         template = pio.templates["plotly_dark"]
         pio.templates.default = "plotly_dark"
@@ -36,9 +36,15 @@ def apply_custom_css(is_dark):
         hover_shadow = "rgba(0, 212, 255, 0.3)"
         text_color = "#31333F"
 
+    # Inject font preconnect + async stylesheet via HTML (non-blocking)
+    st.markdown("""
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" media="print" onload="this.media='all'">
+    """, unsafe_allow_html=True)
+
     st.markdown(f"""
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
         
         html, body, [class*="css"] {{ font-family: 'Inter', sans-serif !important; }}
         .block-container {{ padding-top: 2rem !important; padding-bottom: 2rem !important; }}

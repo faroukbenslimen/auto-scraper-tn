@@ -1,9 +1,20 @@
 import streamlit as st
-import plotly.express as px
-import plotly.graph_objects as go
-from analyzer import by_brand, by_fuel, by_location, by_year
+
+# ── Cached aggregation helpers ─────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def _charts_data(df):
+    from analyzer import by_brand, by_fuel, by_location, by_year
+    return {
+        "brand": by_brand(df).head(10),
+        "fuel":  by_fuel(df),
+        "loc":   by_location(df).head(10),
+        "year":  by_year(df),
+    }
 
 def render_visuals_page(df):
+    import plotly.express as px
+    import plotly.graph_objects as go
+
     st.title("📈 Market Visualizations")
 
     if df.empty:
@@ -11,6 +22,7 @@ def render_visuals_page(df):
         st.stop()
 
     COLORS = ["#3b82f6", "#10b981", "#8b5cf6", "#f43f5e", "#f59e0b", "#06b6d4"]
+    data = _charts_data(df)  # All aggregations computed once, cached
 
     # ── 1. Distribution des prix ──────────────────────────────────────────────
     st.markdown('<div class="section-title">1. Price Distribution</div>', unsafe_allow_html=True)
@@ -38,9 +50,9 @@ def render_visuals_page(df):
         fig_box.update_layout(plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig_box, use_container_width=True)
 
-    # ── 2. Top 10 marques ─────────────────────────────────────────────────────
+    # ── 2. Top 10 brands ─────────────────────────────────────────────
     st.markdown('<div class="section-title">2. Top 10 Brands Analysis</div>', unsafe_allow_html=True)
-    brand_df = by_brand(df).head(10)
+    brand_df = data["brand"]
 
     col3, col4 = st.columns(2)
     with col3:
@@ -68,7 +80,7 @@ def render_visuals_page(df):
     st.markdown('<div class="section-title">3. Market Composition</div>', unsafe_allow_html=True)
     col5, col6 = st.columns(2)
 
-    fuel_df = by_fuel(df)
+    fuel_df = data["fuel"]
     with col5:
         fig_pie = px.pie(
             fuel_df, names="fuel", values="num_listings",
@@ -79,7 +91,7 @@ def render_visuals_page(df):
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with col6:
-        loc_df = by_location(df).head(10)
+        loc_df = data["loc"]
         fig_loc = px.bar(
             loc_df, x="num_listings", y="location", orientation="h",
             title="Listings for the Top 10 Cities",
@@ -91,7 +103,7 @@ def render_visuals_page(df):
 
     # ── 4. Temporal Trends ──────────────────────────────────────────────────
     st.markdown('<div class="section-title">4. Market Maturity: Price vs Age</div>', unsafe_allow_html=True)
-    year_df = by_year(df)
+    year_df = data["year"]
     if not year_df.empty:
         fig_line = px.area(
             year_df, x="year", y="avg_price",

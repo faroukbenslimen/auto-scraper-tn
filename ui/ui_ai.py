@@ -1,11 +1,25 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
-from predictor import CarPricePredictor, PriceTrendPredictor
 from .ui_utils import render_styled_table
 
+# ── Cached ML models (trained once, reused across navigations) ─────────────
+@st.cache_resource
+def _get_price_predictor(_df_hash, _df):
+    from predictor import CarPricePredictor
+    p = CarPricePredictor()
+    p.train(_df)
+    return p
+
+@st.cache_resource
+def _get_trend_model(_df_hash, _df):
+    from predictor import PriceTrendPredictor
+    m = PriceTrendPredictor()
+    m.train(_df)
+    return m
+
 def render_ai_page(df):
+    import plotly.graph_objects as go
+
     st.title("🤖 AI Intelligence Hub")
 
     if df.empty:
@@ -14,18 +28,13 @@ def render_ai_page(df):
 
     tab1, tab2 = st.tabs(["🔮 Smarter AI Assistant", "📉 Forecasting Trends"])
 
-    # ── Onglet 1 : Assistant IA ─────────────────────────────────────────
+    # ── Tab 1 : AI Assistant ──────────────────────────────────────────
     with tab1:
         st.subheader("💬 Market Intelligence Assistant")
         st.info("Ask the AI anything about your data. Examples:\n- *'Estimate a 2018 Golf with 50k km'*\n- *'What is the cheapest Audi?'*\n- *'Average price of 2020 Peugeot'*\n- *'How many listings in Sousse?'*")
 
-        @st.cache_resource
-        def get_trained_predictor(_df):
-            p = CarPricePredictor()
-            p.train(_df)
-            return p
-            
-        predictor = get_trained_predictor(df)
+        # Use globally cached predictor (no retraining on navigation)
+        predictor = _get_price_predictor(len(df), df)
         metrics = predictor.metrics
 
         if "messages" not in st.session_state:
@@ -183,17 +192,12 @@ def render_ai_page(df):
             else:
                 st.info("Train the model with more data to see accuracy metrics.")
 
-    # ── Onglet 2 : Tendance temporelle ────────────────────────────────────────
+    # ── Tab 2: Market Forecasting ───────────────────────────────────
     with tab2:
         st.subheader("📉 Market Forecasting")
         days = st.slider("Forecast Horizon (Days)", 7, 30, 14)
-        @st.cache_resource
-        def get_trained_trend_model(_df):
-            m = PriceTrendPredictor()
-            m.train(_df)
-            return m
-            
-        m = get_trained_trend_model(df)
+        # Use globally cached trend model
+        m = _get_trend_model(len(df), df)
         f_df = m.get_full_history_with_prediction(days=days)
         h_df, p_df = f_df[f_df["type"]=="History"], f_df[f_df["type"]=="Prediction"]
 

@@ -37,32 +37,30 @@ def render_results_page(df):
         with col5:
             year_range = st.slider("Manufacturing Year", year_min, year_max, (year_min, year_max))
 
-    # ── 3. Price History Analytics (Power-User Feature) ──────────────────────
-    import sqlite3
-    db_path = "data/cars.db"
-    price_info = {}
-    
-    if os.path.exists(db_path):
-        conn = sqlite3.connect(db_path)
-        # Select first and last price for each link to find drops
-        query = """
-            SELECT link, 
-                   MAX(price) as max_price, 
-                   MIN(price) as min_price, 
-                   COUNT(price) as p_count 
-            FROM price_history 
-            GROUP BY link
-        """
-        history_df = pd.read_sql(query, conn)
-        conn.close()
-        
-        # Create a lookup for drops
-        for _, row in history_df.iterrows():
-            if row['p_count'] > 1 and row['min_price'] < row['max_price']:
-                price_info[row['link']] = {
-                    "saved": int(row['max_price'] - row['min_price']),
-                    "is_drop": True
-                }
+    # ── Price History Analytics (cached DB query) ────────────────────
+    @st.cache_data(show_spinner=False, ttl=300)
+    def _load_price_history():
+        import sqlite3
+        db_path = "data/cars.db"
+        if not os.path.exists(db_path):
+            return {}
+        try:
+            conn = sqlite3.connect(db_path)
+            query = """
+                SELECT link, MAX(price) as max_price, MIN(price) as min_price,
+                       COUNT(price) as p_count
+                FROM price_history GROUP BY link
+            """
+            history_df = pd.read_sql(query, conn)
+            conn.close()
+            # Vectorized: filter drops, then build dict
+            drops = history_df[(history_df['p_count'] > 1) & (history_df['min_price'] < history_df['max_price'])].copy()
+            drops['saved'] = (drops['max_price'] - drops['min_price']).astype(int)
+            return dict(zip(drops['link'], drops['saved'].apply(lambda s: {"saved": s, "is_drop": True})))
+        except Exception:
+            return {}
+
+    price_info = _load_price_history()
 
     # ── Apply filters ───────────────────────────────────────────────────────
     filtered = df.copy()

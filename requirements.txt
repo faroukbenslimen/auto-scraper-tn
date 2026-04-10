@@ -11,3 +11,5 @@ scikit-learn>=1.4.0
 # Dashboard & Visuals
 streamlit>=1.32.0
 plotly>=5.18.0
+httpx[http2]>=0.26.0
+selectolax>=0.7.6

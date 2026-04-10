@@ -4,22 +4,16 @@ Modularized Architecture (Phase 4)
 """
 
 import streamlit as st
-import pandas as pd
 import os
 import time
-
-# 1. Imports from our modular UI system
-from ui.ui_home import render_home_page
-from ui.ui_results import render_results_page
-from ui.ui_visuals import render_visuals_page
-from ui.ui_ai import render_ai_page
-from ui.ui_utils import detect_dark_mode, setup_plotly_theme, apply_custom_css
-
-# 2. Project Engine Imports
-from scraper import scrape_cars, save_data, load_data, get_last_sync_time
-from cleaner import clean_dataframe
 import threading
 from datetime import datetime
+
+# Lightweight UI utilities (no heavy deps)
+from ui.ui_utils import detect_dark_mode, setup_plotly_theme, apply_custom_css
+
+# Heavy UI page modules and engine are imported lazily (inside functions)
+# to avoid blocking Streamlit's initial render with sklearn/httpx/lxml import costs.
 
 # ─── Initialization & Theme ───────────────────────────────────────────────────
 is_dark = detect_dark_mode()
@@ -37,6 +31,10 @@ apply_custom_css(is_dark)
 # ─── Data State Management ────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def get_cached_data():
+    # Lazy imports: these are only executed after the UI is already rendered
+    import pandas as pd
+    from scraper import load_data
+    from cleaner import clean_dataframe
     raw = load_data()
     return clean_dataframe(raw) if not raw.empty else pd.DataFrame()
 
@@ -114,19 +112,31 @@ with st.sidebar:
     pages_to_scrape = st.slider("Depth (Pages)", 1, 150, 5)
 
     if st.button("🚀 Run Scraper Now"):
+        _scrape_start = time.time()
         with st.spinner("Extracting market data..."):
             try:
+                from scraper import scrape_cars, save_data
                 raw = scrape_cars(num_pages=pages_to_scrape)
+                _elapsed = time.time() - _scrape_start
+                _mins, _secs = divmod(int(_elapsed), 60)
+                _time_str = f"{_mins}m {_secs}s" if _mins else f"{_secs:.0f}s"
+                _rate = f"{len(raw) / _elapsed:.1f}" if _elapsed > 0 and not raw.empty else "0"
+
                 if not raw.empty:
                     save_data(raw)
                     refresh_app_data()
-                    st.success(f"Successfully scraped {len(raw)} listings!")
-                    time.sleep(1)
+                    st.success(
+                        f"✅ Done in **{_time_str}** — "
+                        f"**{len(raw)}** listings scraped "
+                        f"({_rate} listings/sec, {pages_to_scrape} pages)"
+                    )
+                    time.sleep(2)
                     st.rerun()
                 else:
-                    st.warning("No listings found.")
+                    st.warning(f"No listings found. (took {_time_str})")
             except Exception as e:
-                st.error(f"Scraper Error: {e}")
+                _elapsed = time.time() - _scrape_start
+                st.error(f"Scraper Error after {_elapsed:.1f}s: {e}")
 
     if st.button("🗑️ Wipe All Database"):
         for f_path in ["data/cars.db", "data/cars.csv"]:
@@ -138,7 +148,7 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    # Show last sync info
+    # Show last sync info (lazy import - scraper already imported if button clicked)
     from scraper import get_last_sync_time
     sync_status = get_last_sync_time()
     ls = sync_status["last_sync"]
@@ -149,30 +159,29 @@ with st.sidebar:
     st.caption("Auto Market Intelligence v2.2\nSource: automobile.tn")
 
 # ─── Main Page Routing ───────────────────────────────────────────────────────
+# Load data — @st.cache_data ensures this is fast on subsequent runs
 df = get_cached_data()
 
-# 🛡️ 3. Private Power-User: Background Auto-Sync (6-Hour Rule)
+# 🛡️ Background Auto-Sync (6-Hour Rule)
 def background_sync_task():
     """Background task to scrape 150 pages and update the model."""
-    from scraper import set_sync_lock
+    from scraper import scrape_cars, save_data, set_sync_lock
     try:
-        set_sync_lock(True) # Set global lock
-        # 1. Full Depth Scrape
+        set_sync_lock(True)
         new_raw = scrape_cars(num_pages=150)
         if not new_raw.empty:
-            # 2. Persist (this also unlocks and updates time)
             save_data(new_raw)
-            # 3. Cache refresh
             st.cache_data.clear()
-            # 4. Success Toast (Will show on next app interaction)
             st.session_state.sync_finished_at = datetime.now().strftime("%H:%M")
         else:
-            set_sync_lock(False) # Unlock if empty
+            set_sync_lock(False)
     except Exception as e:
+        from scraper import set_sync_lock as _sl
         print(f"Background Sync Failed: {e}")
-        set_sync_lock(False) # Ensure unlock on error
+        _sl(False)
 
-sync_status = get_last_sync_time()
+from scraper import get_last_sync_time as _get_sync
+sync_status = _get_sync()
 last_sync = sync_status["last_sync"]
 is_syncing_globally = sync_status["is_syncing"]
 hours_since = (datetime.now() - last_sync).total_seconds() / 3600
@@ -192,11 +201,16 @@ if "sync_finished_at" in st.session_state:
     st.toast(f"✅ Market intelligence updated at {st.session_state.sync_finished_at}!", icon="✨")
     del st.session_state.sync_finished_at
 
+# Lazy-import page renderers only when the page is actually navigated to
 if page == "🏠 Home":
+    from ui.ui_home import render_home_page
     render_home_page(df)
 elif page == "📊 Results & Filters":
+    from ui.ui_results import render_results_page
     render_results_page(df)
 elif page == "📈 Visualizations":
+    from ui.ui_visuals import render_visuals_page
     render_visuals_page(df)
 elif page == "🤖 AI Prediction":
+    from ui.ui_ai import render_ai_page
     render_ai_page(df)

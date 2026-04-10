@@ -13,6 +13,13 @@ import pandas as pd
 import requests
 import concurrent.futures
 from bs4 import BeautifulSoup
+import random
+import logging
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import asyncio
+import httpx
+from lxml import html as lxml_html
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -31,6 +38,32 @@ EXPECTED_COLUMNS = [
     "image_url",
     "scraped_at",
 ]
+
+
+# ─── HTTP Session (reused across requests) ─────────────────────────────────────
+def _get_session():
+    """Return a module-level requests.Session configured with retries and headers."""
+    if hasattr(_get_session, "SESSION"):
+        return _get_session.SESSION
+
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+
+    retries = Retry(total=5, backoff_factor=0.8, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=frozenset(["GET"]))
+    # pool_connections + pool_maxsize must be >= concurrent sync thread count (10)
+    # to avoid 'Connection pool is full' warnings from urllib3
+    adapter = HTTPAdapter(max_retries=retries, pool_connections=15, pool_maxsize=15)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
+    _get_session.SESSION = session
+    return session
+
+
 
 # ─── Extraction d'une annonce ──────────────────────────────────────────────────
 
@@ -180,7 +213,33 @@ def extract_car(card):
 
 
 def _extract_cards_from_html(html: str):
-    """Construit une liste de conteneurs annonces depuis le DOM rendu."""
+    """Construit une liste de conteneurs annonces depuis le DOM rendu.
+
+    Fast-path: try lxml CSS selection first (much faster on large pages).
+    Falls back to BeautifulSoup heuristics when needed.
+    """
+    # Fast path using lxml cssselect for common card selectors
+    try:
+        tree = lxml_html.fromstring(html)
+        nodes = tree.cssselect("div.occasion-item-v2, div.occasion-item")
+        if nodes:
+            cards = []
+            for n in nodes:
+                try:
+                    outer = lxml_html.tostring(n, encoding="unicode")
+                    soup = BeautifulSoup(outer, "lxml")
+                    tag = soup.find()
+                    if tag:
+                        cards.append(tag)
+                except Exception:
+                    continue
+            if cards:
+                return cards
+    except Exception:
+        # lxml fast path failed — fall back to BeautifulSoup below
+        pass
+
+    # Fallback: original BeautifulSoup-based heuristics
     soup = BeautifulSoup(html, "lxml")
 
     cards = []
@@ -224,53 +283,221 @@ def _extract_cards_from_html(html: str):
 def scrape_single_page(page: int):
     """Scrapes a single page and returns the parsed cards efficiently via HTTP."""
     url = f"{SEARCH_URL}?page={page}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    # Use module-wide session (configured with retries and backoff)
+    session = _get_session()
+
+    page_cars = []
     try:
-        response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"})
-        if response.status_code != 200:
-            print(f"  ❌ Failed to load page {page} — Status {response.status_code}")
-            return []
-        
-        cards = _extract_cards_from_html(response.text)
-        page_cars = []
-        if cards:
-            for item in cards:
-                car = extract_car(item)
-                if car:
-                    page_cars.append(car)
+        # Manual retry loop with exponential backoff + jitter for network robustness
+        max_attempts = 4
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = session.get(url, timeout=(6, 30), headers=headers)
+                status = resp.status_code
+                if status != 200:
+                    logging.debug(f"page {page} returned status {status}")
+                    raise Exception(f"Status {status}")
+
+                html = resp.text
+                # If HTML too short, treat as no-content and retry once
+                if not html or len(html) < 500:
+                    logging.debug(f"page {page} returned short HTML (len={len(html)})")
+                    raise Exception("Short HTML")
+
+                cards = _extract_cards_from_html(html)
+                if cards:
+                    for item in cards:
+                        car = extract_car(item)
+                        if car:
+                            page_cars.append(car)
+                break
+            except Exception as ie:
+                wait = (2 ** (attempt - 1)) + random.uniform(0, 1.0)
+                logging.info(f"  ⚠️  Fetch error page {page} attempt {attempt}/{max_attempts}: {ie}; retrying in {wait:.1f}s")
+                time.sleep(wait)
+        else:
+            logging.warning(f"  ❌ Giving up on page {page} after {max_attempts} attempts")
+
+        # No polite sleep — async path handles rate limiting via semaphore
         return page, page_cars
     except Exception as e:
-        print(f"  ❌ Error on page {page} : {e}")
+        logging.exception(f"  ❌ Error on page {page} : {e}")
         return page, []
+
+
+# ─── Async fetcher (fast network IO) ───────────────────────────────────────────
+async def _fetch_page_async(client: httpx.AsyncClient, page: int, sem: asyncio.Semaphore):
+    url = f"{SEARCH_URL}?page={page}"
+    async with sem:
+        max_attempts = 3         # 3 async attempts before handing off to sync fallback
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = await client.get(url, follow_redirects=True)
+                if resp.status_code != 200:
+                    raise Exception(f"Status {resp.status_code}")
+                html = resp.text
+                if not html or len(html) < 500:
+                    raise Exception("Short HTML")
+                return page, html
+            except Exception as e:
+                wait = (2 ** (attempt - 1)) + random.uniform(0, 1.0)  # 1s, 2s, ...
+                logging.info(f"  Async page {page} attempt {attempt}/{max_attempts}: {e}; retry in {wait:.1f}s")
+                await asyncio.sleep(wait)
+        logging.warning(f"  Async giving up on page {page} after {max_attempts} attempts (sync fallback will handle it)")
+        return page, None
+
+
+async def _fetch_pages_async(num_pages: int, concurrency: int = 10):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    limits = httpx.Limits(max_keepalive_connections=concurrency, max_connections=concurrency + 5)
+    # 25s read timeout: generous enough that slow-but-alive pages don't fall through to sync
+    timeout = httpx.Timeout(25.0, connect=8.0)
+    async with httpx.AsyncClient(headers=headers, timeout=timeout, limits=limits, http2=False) as client:
+        sem = asyncio.Semaphore(concurrency)
+        tasks = [asyncio.create_task(_fetch_page_async(client, p, sem)) for p in range(1, num_pages + 1)]
+        results = await asyncio.gather(*tasks)
+        return {page: html for page, html in results}
+
 
 def scrape_cars(num_pages: int = 5) -> pd.DataFrame:
     """
-    Parcourt `num_pages` pages d'annonces en multi-threading super-rapide.
+    Scrapes `num_pages` pages concurrently using async HTTP + threaded parsing.
+    Prints detailed timing to the terminal.
     """
     all_cars = []
     seen_links = set()
-    print(f"🚀 Starting TURBO Scraping — {num_pages} page(s) over concurrent threads…\n")
+    # ⚠️  automobile.tn throttles above ~10 concurrent connections.
+    # Keeping at 10 ensures near-zero async failures and avoids the costly sync fallback path.
+    concurrency = min(10, max(2, num_pages))
 
-    # Utiliser 10-20 workers pour lancer les requêtes HTTP simultanément
-    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-        futures = {executor.submit(scrape_single_page, p): p for p in range(1, num_pages + 1)}
-        
-        for future in concurrent.futures.as_completed(futures):
-            page, page_cars = future.result()
-            added_count = 0
-            if page_cars:
-                for car in page_cars:
-                    link = car.get("link", "N/A")
-                    if link != "N/A" and link not in seen_links:
-                        seen_links.add(link)
-                        all_cars.append(car)
-                        added_count += 1
-                print(f"  ✅ Thread {page}/{num_pages} finished — {added_count} new listings")
-            else:
-                print(f"  ℹ️ Thread {page}/{num_pages} — No listings detected.")
+    _t_total = time.time()
+    print(f"\n{'='*55}")
+    print(f"  SCRAPER STARTED — {num_pages} page(s)  |  {datetime.now().strftime('%H:%M:%S')}")
+    print(f"  Concurrency: {concurrency} workers")
+    print(f"{'='*55}")
+
+    # ── Phase 1: Async HTTP fetch ────────────────────────────────────────────
+    try:
+        _t_fetch = time.time()
+        print(f"  [1/2] Fetching pages...", flush=True)
+        pages_html = asyncio.run(_fetch_pages_async(num_pages, concurrency=concurrency))
+        _fetch_elapsed = time.time() - _t_fetch
+        print(f"  [1/2] Fetch complete — {_fetch_elapsed:.1f}s ({num_pages} pages)")
+
+        # ── Phase 2: Concurrent HTML parsing ────────────────────────────────
+
+        _t_parse = time.time()
+        print(f"  [2/2] Parsing pages...", flush=True)
+        page_items = list(pages_html.items())
+        _pages_ok = 0
+        _pages_fallback = 0
+        _pages_failed = 0
+
+        def _parse_page(page_html_tuple):
+            page, html = page_html_tuple
+            page_cars = []
+            _pt = time.time()
+            if not html:
+                # Async gave up — retry sync until we get data (no page left behind)
+                attempt = 0
+                while not page_cars:
+                    attempt += 1
+                    _, page_cars = scrape_single_page(page)
+                    if page_cars:
+                        break
+                    wait = min(5.0 * attempt, 30.0)  # 5s, 10s, 15s … capped at 30s
+                    print(f"    page {page:>3}/{num_pages}  [RETRY #{attempt}]  waiting {wait:.0f}s before next attempt...")
+                    time.sleep(wait)
+                elapsed = time.time() - _pt
+                print(f"    page {page:>3}/{num_pages}  [RECOVERED after {attempt} attempt(s)]  {elapsed:.1f}s  {len(page_cars)} listings")
+                return page, page_cars, "FALLBACK"
+            try:
+                cards = _extract_cards_from_html(html)
+                if cards:
+                    for item in cards:
+                        car = extract_car(item)
+                        if car:
+                            page_cars.append(car)
+            except Exception as e:
+                logging.exception(f"  Parsing error on page {page}: {e}")
+            return page, page_cars, "OK"
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = {executor.submit(_parse_page, it): it[0] for it in page_items}
+            for future in concurrent.futures.as_completed(futures):
+                page, page_cars, status = future.result()
+                added_count = 0
+                if page_cars:
+                    for car in page_cars:
+                        link = car.get("link", "N/A")
+                        if link != "N/A" and link not in seen_links:
+                            seen_links.add(link)
+                            all_cars.append(car)
+                            added_count += 1
+                    if status == "OK":
+                        _pages_ok += 1
+                        print(f"    page {page:>3}/{num_pages}  +{added_count:<4} listings  (total: {len(all_cars)})")
+                    elif status == "FALLBACK":
+                        _pages_fallback += 1
+                        # already printed inside _parse_page
+                else:
+                    _pages_failed += 1
+                    if status == "OK":
+                        print(f"    page {page:>3}/{num_pages}  [EMPTY]")
+        _parse_elapsed = time.time() - _t_parse
+        _fallback_info = f", {_pages_fallback} via fallback" if _pages_fallback else ""
+        _failed_info   = f", {_pages_failed} FAILED" if _pages_failed else ""
+        print(f"  [2/2] Parse complete — {_parse_elapsed:.1f}s ({_pages_ok} ok{_fallback_info}{_failed_info})")
+
+    except RuntimeError as re_err:
+        logging.warning(f"Async unavailable ({re_err}); falling back to threaded requests.")
+        _t_parse = time.time()
+        max_workers = min(8, max(2, num_pages))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(scrape_single_page, p): p for p in range(1, num_pages + 1)}
+            for future in concurrent.futures.as_completed(futures):
+                page, page_cars = future.result()
+                added_count = 0
+                if page_cars:
+                    for car in page_cars:
+                        link = car.get("link", "N/A")
+                        if link != "N/A" and link not in seen_links:
+                            seen_links.add(link)
+                            all_cars.append(car)
+                            added_count += 1
+                    print(f"    page {page:>3}/{num_pages}  +{added_count:<4} listings  (total so far: {len(all_cars)})")
+                else:
+                    print(f"    page {page:>3}/{num_pages}  no listings")
+        _parse_elapsed = time.time() - _t_parse
+
+    # ── Final summary ────────────────────────────────────────────────────────
+    _total_elapsed = time.time() - _t_total
+    _mins, _secs = divmod(int(_total_elapsed), 60)
+    _time_str = f"{_mins}m {_secs}s" if _mins else f"{_secs:.1f}s"
+    _rate = f"{len(all_cars) / _total_elapsed:.1f}" if _total_elapsed > 0 and all_cars else "0"
+    _avg_per_page = f"{_total_elapsed / num_pages:.1f}" if num_pages else "0"
 
     df = pd.DataFrame(all_cars, columns=EXPECTED_COLUMNS)
-    print(f"\n📦 Scraping complete — {len(df)} listings collected in total.")
+    print(f"\n{'='*55}")
+    print(f"  SCRAPE COMPLETE")
+    print(f"  Total time   : {_time_str}")
+    print(f"  Listings     : {len(df)}")
+    print(f"  Rate         : {_rate} listings/sec")
+    print(f"  Avg/page     : {_avg_per_page}s")
+    print(f"  Finished at  : {datetime.now().strftime('%H:%M:%S')}")
+    print(f"{'='*55}\n")
     return df
+
 
 
 # ─── Persistance SQLite ────────────────────────────────────────────────────────

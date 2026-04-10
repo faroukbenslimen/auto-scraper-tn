@@ -1,17 +1,39 @@
 import streamlit as st
 import pandas as pd
-from analyzer import full_summary, find_market_bargains
-from predictor import CarPricePredictor
 import numpy as np
 from .ui_utils import render_styled_table
+
+# ── Cached heavy computations ─────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def _cached_summary(df):
+    from analyzer import full_summary
+    return full_summary(df)
+
+@st.cache_resource
+def _cached_predictor(_n, _df):
+    """Trains the ML model — cached as a resource (sklearn objects not picklable)."""
+    from predictor import CarPricePredictor
+    p = CarPricePredictor()
+    p.train(_df)
+    return p
+
+@st.cache_data(show_spinner=False)
+def _cached_bargains(df):
+    """Runs bulk bargain detection — returns only the bargains DataFrame (serializable)."""
+    from analyzer import find_market_bargains
+    predictor = _cached_predictor(len(df), df)
+    if predictor.is_trained:
+        return find_market_bargains(df, predictor, threshold=0.15)
+    return pd.DataFrame()
 
 def render_home_page(df):
     if df.empty:
         st.info("👈 Click on **Start Scraping** in the sidebar to collect data.")
         st.stop()
 
-    summary = full_summary(df)
-    
+    with st.spinner("Loading market intelligence..."):
+        summary = _cached_summary(df)
+
     st.title("🚀 Market Intelligence Dashboard")
     st.markdown("Real-time analysis of the Tunisian automotive market.")
     
@@ -76,39 +98,28 @@ def render_home_page(df):
 
     st.markdown("---")
 
-    # ── 🔥 AI Market Bargains ──────────────────────────────────────────
+    # ── 🔥 AI Market Bargains ──────────────────────────────────
     st.subheader("🔥 Top Market Bargains (AI Verified)")
     st.markdown("These listings are currently priced at least **15% below** our AI's estimated market value.")
-    
-    # Initialize and train predictor once
-    @st.cache_resource
-    def get_trained_predictor(_df):
-        p = CarPricePredictor()
-        p.train(_df)
-        return p
-    
-    predictor = get_trained_predictor(df)
-    
+
+    # Use cached bargain detection (only retrains when data changes)
+    predictor = _cached_predictor(len(df), df)
+    bargains = _cached_bargains(df)
+
     if predictor.is_trained:
-        bargains = find_market_bargains(df, predictor, threshold=0.15)
-        
         if not bargains.empty:
-            # Show top 5 bargains
             display_bargains = bargains.head(5).copy()
-            # Format the output for better reading
             display_bargains["Saving"] = (display_bargains["savings_pct"] * 100).apply(lambda x: f"🔥 {x:.1f}% OFF")
             display_bargains["AI Fair Price"] = display_bargains["predicted_price"].apply(lambda x: f"{int(x):,} DT")
             display_bargains["Market Price"] = display_bargains["price"].apply(lambda x: f"{int(x):,} DT")
-            
-            # Reorder
             cols_to_show = ["image_url", "title", "Market Price", "AI Fair Price", "Saving", "link"]
             render_styled_table(display_bargains[cols_to_show], table_id="market_bargains")
-            
             st.success("💡 **Intelligence Tip**: The items above represent the highest statistical value in the dataset based on current trends.")
         else:
             st.info("No major bargains detected at a 15% threshold. Most listings are priced close to market value.")
     else:
         st.warning("AI model still maturing. Bargain detection will be available once more data is collected.")
+
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.subheader("🏁 Market Extremes")

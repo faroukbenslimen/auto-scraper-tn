@@ -19,8 +19,7 @@ dist/
 pip-wheel-metadata/
 
 # Data and debug outputs
-/data/
-/data/*.csv
+data/
 debug_page.html
 
 # Secrets
@@ -54,4 +53,11 @@ Projet Python.pdf
 implementation_plan.md
 new.md
 market_intelligence_report.md
+tttt.md
 
+# Dev / diagnostic scripts (not part of the app)
+diagnostic.py
+test_nlp.py
+
+# Planning docs
+*.docx
