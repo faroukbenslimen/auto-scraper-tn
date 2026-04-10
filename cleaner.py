@@ -9,9 +9,16 @@ import re
 # ─── Fonctions de nettoyage atomiques ─────────────────────────────────────────
 
 def clean_price(value: str) -> float:
-    """
-    Convertit une chaîne prix en float.
-    Ex : "15 000 DT" → 15000.0 | "15.000" → 15000.0 | "N/A" → NaN
+    """Converts a raw price string into a float.
+
+    Handles common Tunisian formatting artifacts like 'DT', 'TND', 'DINARS',
+    and variations in thousands/decimal separators.
+
+    Args:
+        value: The raw price string (e.g., '15 000 DT', '15.000').
+
+    Returns:
+        The cleaned price as a float, or np.nan if conversion fails.
     """
     try:
         if pd.isna(value) or str(value).strip() in ("N/A", "", "-"):
@@ -44,9 +51,15 @@ def clean_price(value: str) -> float:
 
 
 def clean_year(value: str) -> float:
-    """
-    Extrait une année valide (1980–2025).
-    Ex : "Année : 2019" → 2019 | "2 019" → 2019 | "N/A" → NaN
+    """Extracts a valid automotive year from a raw string.
+
+    Looks for four-digit years between 1980 and 2025.
+
+    Args:
+        value: The raw year string (e.g., 'Année : 2019', '2 019').
+
+    Returns:
+        A float representing the year, or np.nan if not found.
     """
     try:
         if pd.isna(value) or str(value).strip() in ("N/A", "", "-"):
@@ -58,9 +71,13 @@ def clean_year(value: str) -> float:
 
 
 def clean_km(value: str) -> float:
-    """
-    Convertit le kilométrage en float.
-    Ex : "120 000 km" → 120000.0
+    """Converts a raw mileage string into a float.
+
+    Arg:
+        value: Raw mileage string (e.g., '120 000 km').
+
+    Returns:
+        Total kilometers as a float, or np.nan if conversion fails.
     """
     try:
         if pd.isna(value) or str(value).strip() in ("N/A", "", "-"):
@@ -72,9 +89,16 @@ def clean_km(value: str) -> float:
 
 
 def extract_brand(title: str) -> str:
-    """
-    Extrait la marque automobile depuis le titre de l'annonce.
-    Fonctionne sur les marques courantes en Tunisie.
+    """Identifies the car manufacturer brand from the listing title.
+
+    Matches against a predefined list of brands common in the Tunisian market.
+    Defaults to the first word of the title if no known brand is found.
+
+    Args:
+        title: listing title (e.g., 'Toyota Corolla 2019').
+
+    Returns:
+        The identified brand name or 'Other'.
     """
     KNOWN_BRANDS = [
         "Toyota", "Volkswagen", "Peugeot", "Renault", "Citroën", "Citroen",
@@ -95,7 +119,7 @@ def extract_brand(title: str) -> str:
 
 
 def clean_fuel(value: str) -> str:
-    """Normalise le type de carburant."""
+    """Normalizes the fuel type category."""
     val = str(value).lower().strip()
     if "diesel" in val or "gasoil" in val:
         return "Diesel"
@@ -111,7 +135,7 @@ def clean_fuel(value: str) -> str:
 
 
 def clean_location(value: str) -> str:
-    """Normalise la localisation (supprime espaces parasites)."""
+    """Normalizes the geographical location string."""
     cleaned = re.sub(r"\s+", " ", str(value)).strip()
     return cleaned if cleaned not in ("N/A", "", "nan") else "Not specified"
 
@@ -119,11 +143,17 @@ def clean_location(value: str) -> str:
 # ─── Pipeline principal ────────────────────────────────────────────────────────
 
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Apply the full cleaning pipeline to raw scraped data.
-    
-    Fast-path: If the data is already clean (loaded from DB with numeric price/year/km
-    and no raw columns), skip the expensive apply() operations entirely.
+    """Applies the full cleaning and normalization pipeline to a DataFrame.
+
+    This function handles both raw scraped data (slow path) and previously
+    cleansed database data (fast path). It extracts year, mileage, and brand
+    information, computes vehicle age, and removes duplicates.
+
+    Args:
+        df: Input DataFrame containing raw or partially cleaned data.
+
+    Returns:
+        A cleaned DataFrame with normalized numeric columns and standard types.
     """
     if df.empty:
         return df

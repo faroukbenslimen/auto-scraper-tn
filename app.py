@@ -156,7 +156,7 @@ with st.sidebar:
     st.caption(f"🕒 Last Full Sync: {ls_str}")
     if sync_status["is_syncing"]:
         st.caption("🔄 **Sync in progress...**")
-    st.caption("Auto Market Intelligence v2.2\nSource: automobile.tn")
+    st.caption("Auto Market Intelligence v2.3 (Hardened)\nSource: automobile.tn")
 
 # ─── Main Page Routing ───────────────────────────────────────────────────────
 # Load data — @st.cache_data ensures this is fast on subsequent runs

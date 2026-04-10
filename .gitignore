@@ -61,3 +61,9 @@ test_nlp.py
 
 # Planning docs
 *.docx
+the_journey.md
+auto_scraper_tn_plan_with_phase6.docx
+
+# Testing and verification
+tests/
+.pytest_cache/

@@ -16,18 +16,18 @@ warnings.filterwarnings("ignore")
 # ─── Model 1: Feature-based Price Prediction ──────────────────────────────────
 
 class CarPricePredictor:
-    """
-    Predicts the fair market price of a car from its features.
+    """Predicts car prices based on features using Gradient Boosting.
 
-    Performance tuning (v2.3):
-    - max_iter reduced from 500 → 150: sufficient for ~1-5k rows, 4x faster
-    - early_stopping enabled: auto-stops when val score stops improving
-    - validation_fraction=0.1: uses 10% of train set for early stopping
-    - n_iter_no_change=15: patience before stopping
-    - learning_rate bumped to 0.08: faster convergence with early stopping safety net
-    - max_leaf_nodes=31: balanced complexity (was 40)
-    - Added 'age' feature for better signal
-    - Outlier trimming before training: removes listings with price > 99th percentile
+    This predictor uses a HistGradientBoostingRegressor optimized for the
+    typical scale of Tunisian automotive datasets (1,000–10,000 rows).
+    It features outlier trimming, log-transform targets for price skew,
+    and dynamic confidence margin calculation.
+
+    Attributes:
+        model: The underlying Scikit-Learn regressor.
+        label_encoders: Mapping for categorical features.
+        is_trained: Boolean flag indicating readiness for prediction.
+        metrics: Dictionary of performance tracking (MAE, R2, MAPE).
     """
 
     def __init__(self):
@@ -94,7 +94,14 @@ class CarPricePredictor:
         return data
 
     def train(self, df: pd.DataFrame) -> dict:
-        """Train the model. Returns metrics dict."""
+        """Trains the price prediction model on a provided dataset.
+
+        Args:
+            df: DataFrame containing required columns: price, year, km, brand, fuel, location.
+
+        Returns:
+            A dictionary of training metrics (MAE, R2, MAPE, etc.).
+        """
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import mean_absolute_error, r2_score
 
@@ -150,7 +157,18 @@ class CarPricePredictor:
         fuel: str,
         location: str = "Tunis",
     ) -> dict:
-        """Return predicted price with confidence range."""
+        """Predicts a car's price with a suggested confidence interval.
+
+        Args:
+            year: Manufacturing year.
+            km: Total mileage.
+            brand: Vehicle brand.
+            fuel: Fuel type.
+            location: Geographical location (default: 'Tunis').
+
+        Returns:
+            A dict with 'predicted' value, 'low' and 'high' bounds, and a 'confidence' score.
+        """
         if not self.is_trained:
             raise RuntimeError("Model not trained. Call train() first.")
 
@@ -196,9 +214,17 @@ class CarPricePredictor:
 # ─── Model 2: Market Price Trend ──────────────────────────────────────────────
 
 class PriceTrendPredictor:
-    """
-    Analyzes the average market price trend over time and forecasts N days ahead.
-    Uses linear regression on daily average prices.
+    """Analyzes and forecasts overall market price momentum.
+
+    Uses linear regression on aggregated daily average prices to determine if
+    the market is currently in an uptrend or downtrend.
+
+    Attributes:
+        model: The underlying LinearRegression model.
+        is_trained: Boolean flag indicating if the trend model is fitted.
+        last_t: The last time step index used in training.
+        base_date: The reference date for time series calculations.
+        history: The processed historical price data.
     """
 
     def __init__(self):

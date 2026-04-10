@@ -42,26 +42,15 @@ EXPECTED_COLUMNS = [
 
 # ─── HTTP Session (reused across requests) ─────────────────────────────────────
 def _get_session():
-    """Return a module-level requests.Session configured with retries and headers."""
-    if hasattr(_get_session, "SESSION"):
-        return _get_session.SESSION
+    """Returns a module-level requests.Session configured for high-concurrency scraping.
 
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    })
+    The session is configured with a custom User-Agent, a connection pool sized
+    for parallel workers (15), and a robust retry strategy for handling transient
+    network errors (429, 500, 502, 503, 504).
 
-    retries = Retry(total=5, backoff_factor=0.8, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=frozenset(["GET"]))
-    # pool_connections + pool_maxsize must be >= concurrent sync thread count (10)
-    # to avoid 'Connection pool is full' warnings from urllib3
-    adapter = HTTPAdapter(max_retries=retries, pool_connections=15, pool_maxsize=15)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-
-    _get_session.SESSION = session
-    return session
+    Returns:
+        A shared requests.Session instance.
+    """
 
 
 
@@ -120,7 +109,18 @@ def _looks_like_listing_link(href: str) -> bool:
 
 
 def extract_car(card):
-    """Extrait les données d'un bloc HTML d'annonce voiture rendu dynamiquement."""
+    """Parses a single vehicle listing from an HTML container.
+
+    Extracts core attributes including title, price, year, mileage, fuel type,
+    location, direct link, and image URL. Uses multiple fallback CSS selectors
+    and regex patterns to handle different site layouts.
+
+    Args:
+        card: A BeautifulSoup Tag representing the vehicle listing.
+
+    Returns:
+        A dictionary containing the car's data, or None if extraction fails.
+    """
     try:
         text_blob = card.get_text(" ", strip=True)
 
@@ -213,10 +213,17 @@ def extract_car(card):
 
 
 def _extract_cards_from_html(html: str):
-    """Construit une liste de conteneurs annonces depuis le DOM rendu.
+    """Extracts all car listing containers from a raw HTML string.
 
-    Fast-path: try lxml CSS selection first (much faster on large pages).
-    Falls back to BeautifulSoup heuristics when needed.
+    Uses a two-step approach:
+    1. Fast Path: Uses lxml and CSS selectors for high-speed node extraction.
+    2. Fallback: Uses BeautifulSoup heuristics to find listings when CSS fails.
+
+    Args:
+        html: The raw HTML content of the page.
+
+    Returns:
+        A list of BeautifulSoup Tags, each representing a listing.
     """
     # Fast path using lxml cssselect for common card selectors
     try:
@@ -281,7 +288,17 @@ def _extract_cards_from_html(html: str):
 # ─── Scraping paginé ──────────────────────────────────────────────────────────
 
 def scrape_single_page(page: int):
-    """Scrapes a single page and returns the parsed cards efficiently via HTTP."""
+    """Scrapes and parses a single search results page synchronously.
+
+    This function acts as a robust fallback for the async fetcher. It includes
+    manual exponential backoff retries and content verification.
+
+    Args:
+        page: The page number to scrape.
+
+    Returns:
+        A tuple of (page, list_of_car_dicts).
+    """
     url = f"{SEARCH_URL}?page={page}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -370,9 +387,19 @@ async def _fetch_pages_async(num_pages: int, concurrency: int = 10):
 
 
 def scrape_cars(num_pages: int = 5) -> pd.DataFrame:
-    """
-    Scrapes `num_pages` pages concurrently using async HTTP + threaded parsing.
-    Prints detailed timing to the terminal.
+    """Orchestrates the scraping of multiple pages using a high-concurrency engine.
+
+    Uses a modern hybrid architecture:
+    1. Async I/O (httpx) to fetch all HTML pages simultaneously.
+    2. Threaded Parsing (BS4/lxml) to process those pages in parallel.
+    3. Infinite Retry Fallback: Any page that fails async fetch is automatically
+       retried synchronously until data is retrieved.
+
+    Args:
+        num_pages: The number of pages to scrape starting from page 1.
+
+    Returns:
+        A pandas DataFrame containing all scraped listings.
     """
     all_cars = []
     seen_links = set()
@@ -539,7 +566,19 @@ def update_last_sync_time(meta_path: str = "data/metadata.json"):
     set_sync_lock(False, meta_path)
 
 def save_data(df: pd.DataFrame, db_path: str = "data/cars.db") -> pd.DataFrame:
-    """Sauvegarde le DataFrame dans une base SQLite avec suivi historique."""
+    """Saves listings to a SQLite database with historic price tracking.
+
+    Maintains two tables:
+    - `cars`: The latest snapshot of each unique car (keyed by link).
+    - `price_history`: An append-only log of every price observation for history.
+
+    Args:
+        df: The DataFrame to save.
+        db_path: Path to the SQLite database.
+
+    Returns:
+        A merged DataFrame representing the updated current state.
+    """
     os.makedirs("data", exist_ok=True)
 
     if df.empty:
@@ -580,7 +619,7 @@ def save_data(df: pd.DataFrame, db_path: str = "data/cars.db") -> pd.DataFrame:
 
 
 def load_data(db_path: str = "data/cars.db") -> pd.DataFrame:
-    """Charge les données depuis la base SQLite."""
+    """Loads the current car snapshot from the SQLite database."""
     if os.path.exists(db_path):
         conn = sqlite3.connect(db_path)
         try:

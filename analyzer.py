@@ -9,7 +9,7 @@ import numpy as np
 # ─── Statistiques générales ───────────────────────────────────────────────────
 
 def get_price_stats(df: pd.DataFrame) -> dict:
-    """Retourne les statistiques descriptives du prix."""
+    """Computes descriptive statistics (mean, median, quantiles) for car prices."""
     prices = df["price"].dropna()
     if prices.empty:
         return {}
@@ -26,7 +26,7 @@ def get_price_stats(df: pd.DataFrame) -> dict:
 
 
 def get_km_stats(df: pd.DataFrame) -> dict:
-    """Retourne les statistiques descriptives du kilométrage."""
+    """Computes descriptive statistics for vehicle mileage."""
     kms = df["km"].dropna()
     if kms.empty:
         return {}
@@ -40,7 +40,7 @@ def get_km_stats(df: pd.DataFrame) -> dict:
 
 
 def get_year_stats(df: pd.DataFrame) -> dict:
-    """Retourne les statistiques descriptives de l'année."""
+    """Computes basic range statistics for manufacturing years."""
     years = df["year"].dropna()
     if years.empty:
         return {}
@@ -55,7 +55,7 @@ def get_year_stats(df: pd.DataFrame) -> dict:
 # ─── Top / Bottom 5 ──────────────────────────────────────────────────────────
 
 def top5_expensive(df: pd.DataFrame) -> pd.DataFrame:
-    """Top 5 voitures les plus chères."""
+    """Retrieves the top 5 most expensive car listings."""
     return (
         df.dropna(subset=["price"])
         .nlargest(5, "price")[["title", "brand", "year", "price", "km", "fuel", "location"]]
@@ -63,7 +63,7 @@ def top5_expensive(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def bottom5_cheapest(df: pd.DataFrame) -> pd.DataFrame:
-    """Top 5 voitures les moins chères (prix > 0)."""
+    """Retrieves the top 5 least expensive car listings."""
     return (
         df[df["price"] > 0].dropna(subset=["price"])
         .nsmallest(5, "price")[["title", "brand", "year", "price", "km", "fuel", "location"]]
@@ -71,7 +71,7 @@ def bottom5_cheapest(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def top5_newest(df: pd.DataFrame) -> pd.DataFrame:
-    """Top 5 voitures les plus récentes."""
+    """Retrieves the top 5 most recently manufactured cars."""
     return (
         df.dropna(subset=["year"])
         .nlargest(5, "year")[["title", "brand", "year", "price", "km", "fuel", "location"]]
@@ -79,7 +79,7 @@ def top5_newest(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def top5_low_km(df: pd.DataFrame) -> pd.DataFrame:
-    """Top 5 voitures avec le moins de kilométrage."""
+    """Retrieves the top 5 cars with the lowest mileage."""
     return (
         df[df["km"] > 0].dropna(subset=["km"])
         .nsmallest(5, "km")[["title", "brand", "year", "price", "km", "fuel", "location"]]
@@ -152,7 +152,7 @@ def price_distribution_bins(df: pd.DataFrame, bins: int = 10) -> pd.DataFrame:
 # ─── Résumé complet ───────────────────────────────────────────────────────────
 
 def full_summary(df: pd.DataFrame) -> dict:
-    """Generates a complete analysis report."""
+    """Generates a complete multi-dimensional statistical report of the market."""
     return {
         "total_listings":    len(df),
         "with_price":        int(df["price"].notna().sum()),
