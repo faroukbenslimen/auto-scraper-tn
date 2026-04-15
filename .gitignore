@@ -55,6 +55,14 @@ new.md
 market_intelligence_report.md
 tttt.md
 
+# Persisted models and DBs
+models/
+*.pkl
+*.joblib
+*.db
+*.sqlite
+*.sqlite3
+
 # Dev / diagnostic scripts (not part of the app)
 diagnostic.py
 test_nlp.py
