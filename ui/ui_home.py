@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import hashlib
 from .ui_utils import render_styled_table
 
 # ── Cached heavy computations ─────────────────────────────────────────
@@ -9,11 +10,29 @@ def _cached_summary(df):
     from analyzer import full_summary
     return full_summary(df)
 
+def _get_data_hash(df):
+    if df is None or df.empty:
+        return "empty"
+    brand_counts = df['brand'].value_counts().to_json()
+    return hashlib.md5(f"{brand_counts}:{len(df)}:{int(df['price'].sum() if 'price' in df.columns and not df['price'].isna().all() else 0)}".encode()).hexdigest()[:16]
+
+
 @st.cache_resource
-def _cached_predictor(_n, _df):
-    """Trains the ML model — cached as a resource (sklearn objects not picklable)."""
+def _cached_predictor(_df_hash, _df):
     from predictor import CarPricePredictor
     p = CarPricePredictor()
+
+    # Try to load saved model first
+    try:
+        if p.load():
+            current_hash = p.get_data_hash(_df) if hasattr(p, 'get_data_hash') else _df_hash
+            if getattr(p, '_last_data_hash', None) == current_hash:
+                print(f"  [Cache] Using loaded model (hash: {current_hash})")
+                return p
+            print(f"  [Cache] Data changed ({getattr(p, '_last_data_hash', 'none')} -> {current_hash}), retraining...")
+    except Exception:
+        pass
+
     p.train(_df)
     return p
 
@@ -21,7 +40,8 @@ def _cached_predictor(_n, _df):
 def _cached_bargains(df):
     """Runs bulk bargain detection — returns only the bargains DataFrame (serializable)."""
     from analyzer import find_market_bargains
-    predictor = _cached_predictor(len(df), df)
+    df_hash = _get_data_hash(df)
+    predictor = _cached_predictor(df_hash, df)
     if predictor.is_trained:
         return find_market_bargains(df, predictor, threshold=0.15)
     return pd.DataFrame()
@@ -103,7 +123,8 @@ def render_home_page(df):
     st.markdown("These listings are currently priced at least **15% below** our AI's estimated market value.")
 
     # Use cached bargain detection (only retrains when data changes)
-    predictor = _cached_predictor(len(df), df)
+    df_hash = _get_data_hash(df)
+    predictor = _cached_predictor(df_hash, df)
     bargains = _cached_bargains(df)
 
     if predictor.is_trained:

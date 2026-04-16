@@ -8,6 +8,9 @@ import os
 import time
 import threading
 from datetime import datetime
+import json
+import socketserver
+from http.server import BaseHTTPRequestHandler
 
 # Lightweight UI utilities (no heavy deps)
 from ui.ui_utils import detect_dark_mode, setup_plotly_theme, apply_custom_css
@@ -27,6 +30,38 @@ st.set_page_config(
 )
 
 apply_custom_css(is_dark)
+
+
+# ─── Lightweight health endpoint (127.0.0.1:8765) ─────────────────────────
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path != "/healthz":
+            self.send_response(404)
+            self.end_headers()
+            return
+        status = {"ok": True}
+        status["model_exists"] = os.path.exists("models/price_predictor.pkl")
+        status["data_exists"] = os.path.exists("data/cars.db") or os.path.exists("data/cars.csv")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(status).encode())
+
+
+def _start_health_server(port: int = 8765):
+    try:
+        server = socketserver.TCPServer(("127.0.0.1", port), _HealthHandler)
+        server.serve_forever()
+    except Exception as e:
+        print(f"Health server failed: {e}")
+
+
+# Start the health server in background (daemon)
+try:
+    t_h = threading.Thread(target=_start_health_server, args=(8765,), daemon=True)
+    t_h.start()
+except Exception:
+    pass
 
 # ─── Data State Management ────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
@@ -161,6 +196,27 @@ with st.sidebar:
 # ─── Main Page Routing ───────────────────────────────────────────────────────
 # Load data — @st.cache_data ensures this is fast on subsequent runs
 df = get_cached_data()
+
+# Bootstrap models on startup (load cached model if compatible)
+def bootstrap_models(df):
+    from model_manager import get_manager
+    if df is None or df.empty:
+        return None
+    mgr = get_manager()
+    predictor, was_trained = mgr.load_or_train_price_model(df)
+    if was_trained:
+        try:
+            st.toast("🧠 New AI model trained and cached!")
+        except Exception:
+            pass
+    return predictor
+
+if "predictor_bootstrapped" not in st.session_state:
+    try:
+        bootstrap_models(df)
+    except Exception:
+        pass
+    st.session_state.predictor_bootstrapped = True
 
 # 🛡️ Background Auto-Sync (6-Hour Rule)
 def background_sync_task():

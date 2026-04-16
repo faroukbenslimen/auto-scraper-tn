@@ -1,14 +1,30 @@
 import streamlit as st
 import pandas as pd
+import hashlib
 from .ui_utils import render_styled_table
 
 # ── Cached ML models (trained once, reused across navigations) ─────────────
+def _get_data_hash(df):
+    if df is None or df.empty:
+        return "empty"
+    brand_counts = df['brand'].value_counts().to_json()
+    return hashlib.md5(f"{brand_counts}:{len(df)}:{int(df['price'].sum() if 'price' in df.columns and not df['price'].isna().all() else 0)}".encode()).hexdigest()[:16]
+
+
 @st.cache_resource
 def _get_price_predictor(_df_hash, _df):
     from predictor import CarPricePredictor
     p = CarPricePredictor()
+    try:
+        if p.load():
+            current_hash = p.get_data_hash(_df) if hasattr(p, 'get_data_hash') else _df_hash
+            if getattr(p, '_last_data_hash', None) == current_hash:
+                return p
+    except Exception:
+        pass
     p.train(_df)
     return p
+
 
 @st.cache_resource
 def _get_trend_model(_df_hash, _df):

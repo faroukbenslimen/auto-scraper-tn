@@ -51,8 +51,59 @@ def _get_session():
     Returns:
         A shared requests.Session instance.
     """
+_session = None
+
+def _get_session():
+    """Returns a module-level requests.Session configured for high-concurrency scraping.
+
+    The session is configured with a custom User-Agent, a connection pool sized
+    for parallel workers (15), and a robust retry strategy for handling transient
+    network errors (429, 500, 502, 503, 504).
+
+    Returns:
+        A shared requests.Session instance.
+    """
+    global _session
+    if _session is not None:
+        return _session
+
+    session = requests.Session()
+
+    # Robust retry strategy for transient network/server errors
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=frozenset(["HEAD", "GET", "OPTIONS"]),
+    )
+
+    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=15, pool_maxsize=30)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
+    # Default headers to emulate a modern browser
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    })
+
+    _session = session
+    return _session
 
 
+def reset_session():
+    """Reset and close the module-level session (useful after errors)."""
+    global _session
+    try:
+        if _session is not None:
+            _session.close()
+    except Exception:
+        pass
+    _session = None
 
 # ─── Extraction d'une annonce ──────────────────────────────────────────────────
 

@@ -11,6 +11,9 @@ import pandas as pd
 import numpy as np
 import warnings
 warnings.filterwarnings("ignore")
+import hashlib
+import os
+from model_io import save_model, load_model, get_model_hash
 
 
 # ─── Model 1: Feature-based Price Prediction ──────────────────────────────────
@@ -47,6 +50,9 @@ class CarPricePredictor:
         self.feature_names = ["year", "km", "brand", "fuel", "location"]
         self.is_trained = False
         self.metrics = {}
+        # Persistence path
+        self._model_path = os.path.join("models", "price_predictor.pkl")
+        self._last_data_hash = None
 
     def _encode(self, df: pd.DataFrame, fit: bool = False) -> pd.DataFrame:
         """Encode categorical variables with safe unknown-category handling."""
@@ -147,7 +153,64 @@ class CarPricePredictor:
             f"  [Predictor] Trained in {self.metrics['n_iter']} iterations — "
             f"MAE={mae:,.0f} DT | R²={r2:.3f} | MAPE={mape:.1f}%"
         )
+
+        # Compute and persist model hash + file
+        try:
+            self._last_data_hash = self.get_data_hash(df)
+            self.save(self._model_path)
+        except Exception:
+            pass
         return self.metrics
+
+    # ─── Persistence helpers ─────────────────────────────────────────────
+    def get_data_hash(self, df: pd.DataFrame) -> str:
+        """Create a stable content-based hash for the training data."""
+        if df is None or df.empty:
+            return "empty"
+        brand_sig = df["brand"].value_counts().to_json()
+        price_sig = f"{int(df['price'].sum()):d}:{float(df['price'].mean()):.2f}:{len(df)}"
+        combined = f"{brand_sig}:{price_sig}"
+        return hashlib.md5(combined.encode()).hexdigest()[:16]
+
+    def save(self, path: str = None) -> str:
+        """Persist model, encoders and metadata to disk. Returns SHA256 hex or empty string on failure."""
+        path = path or self._model_path
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            payload = {
+                "model": self.model,
+                "label_encoders": self.label_encoders,
+                "metrics": self.metrics,
+                "feature_names": self.feature_names,
+                "hash": getattr(self, "_last_data_hash", None),
+            }
+            digest = save_model(payload, path)
+            if digest:
+                print(f"  [Predictor] Model persisted to {path} ({digest[:8]}..)")
+                return digest
+        except Exception as e:
+            print(f"  [Predictor] Save failed: {e}")
+        return ""
+
+    def load(self, path: str = None) -> bool:
+        """Load a persisted model from disk. Returns True on success."""
+        path = path or self._model_path
+        try:
+            obj = load_model(path)
+            if obj is None:
+                return False
+            # Backwards tolerant loading
+            self.model = obj.get("model", self.model)
+            self.label_encoders = obj.get("label_encoders", obj.get("encoders", self.label_encoders))
+            self.metrics = obj.get("metrics", self.metrics)
+            self.feature_names = obj.get("feature_names", self.feature_names)
+            self._last_data_hash = obj.get("hash", None)
+            self.is_trained = True
+            print(f"  [Predictor] Model loaded from {path}")
+            return True
+        except Exception as e:
+            print(f"  [Predictor] Load failed: {e}")
+            return False
 
     def predict_range(
         self,
