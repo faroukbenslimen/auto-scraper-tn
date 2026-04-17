@@ -59,3 +59,46 @@ python -c "from scraper import scrape_cars; df = scrape_cars(3); df.to_csv('data
 
 - If you plan to run this on a server or CI, make sure a browser binary (Chrome/Edge) is installed, or configure a container with one. For a GitHub Actions job, use an image that includes Chrome or install it during the job.
 
+## 📦 Deployment
+
+Quick deployment options and commands.
+
+- Run locally (venv/conda):
+
+```powershell
+# Create venv
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
+
+# Start Streamlit on port 8502 (avoid 8501)
+python -m streamlit run app.py --server.port=8502
+```
+
+- Run the background services (optional):
+
+```powershell
+# Health service (for monitoring)
+python health_service.py           # serves http://127.0.0.1:8765/healthz
+
+# Scheduler (APScheduler) — runs periodic scrapes
+$env:PYTHONPATH='.'; python scripts/scheduler.py
+```
+
+- Run in Docker (ports: 8502 -> container, 8765 for health):
+
+```bash
+docker build -t auto-scraper-tn .
+docker run -p 8502:8502 -p 8765:8765 --rm auto-scraper-tn
+```
+
+- CI / Automated deploys:
+
+- The repository contains a minimal GitHub Actions workflow (`.github/workflows/ci.yml`) that runs `diagnostic.py` and a lightweight smoke script on push/PR to `main`.
+
+Notes:
+- Streamlit default port in this project is `8502` to avoid conflicts with local dev servers.
+- The scheduler uses `SCRAPER_INTERVAL_MINUTES` and `SCRAPE_PAGES` env vars to control frequency and breadth.
+- The scraper caches HTTP responses under `http_cache/` and the primary dataset is persisted in `data/cars.db` (SQLite).
+
