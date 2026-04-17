@@ -20,6 +20,9 @@ from urllib3.util.retry import Retry
 import asyncio
 import httpx
 from lxml import html as lxml_html
+import hashlib
+import json
+import sqlite3
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -104,6 +107,86 @@ def reset_session():
     except Exception:
         pass
     _session = None
+
+
+# ─── Simple file-based HTTP cache (shared by sync and async fetchers) ────────
+CACHE_DIR = os.getenv("SCRAPER_CACHE_DIR", "http_cache")
+CACHE_EXPIRE = int(os.getenv("SCRAPER_CACHE_EXPIRE", "3600"))  # seconds
+
+
+def _ensure_cache_dir():
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+    except Exception:
+        pass
+
+
+def _cache_key(url: str) -> str:
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()
+
+
+def read_cache(url: str):
+    """Return cached HTML for URL or None if missing/expired."""
+    _ensure_cache_dir()
+    key = _cache_key(url)
+    path = os.path.join(CACHE_DIR, f"{key}.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        ts = float(obj.get("ts", 0))
+        if time.time() - ts <= CACHE_EXPIRE:
+            return obj.get("content")
+        else:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+            return None
+    except Exception:
+        return None
+
+
+def write_cache(url: str, content: str):
+    """Write HTML content to cache for the given URL."""
+    _ensure_cache_dir()
+    key = _cache_key(url)
+    path = os.path.join(CACHE_DIR, f"{key}.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"ts": time.time(), "content": content}, f)
+    except Exception:
+        logging.debug("Failed to write cache for %s", url)
+
+
+def get_existing_links_from_db(db_path: str = "data/cars.db") -> set:
+    """Load existing `link` values from the `cars` table in the SQLite DB.
+
+    Returns a set of links (possibly empty) so the scraper can avoid reprocessing
+    items already stored from previous runs.
+    """
+    links = set()
+    if not os.path.exists(db_path):
+        return links
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.execute("SELECT link FROM cars")
+            for row in cur.fetchall():
+                if row and row[0]:
+                    links.add(row[0])
+        except Exception:
+            # Table may not exist yet
+            pass
+    except Exception:
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return links
 
 # ─── Extraction d'une annonce ──────────────────────────────────────────────────
 
@@ -361,6 +444,19 @@ def scrape_single_page(page: int):
     session = _get_session()
 
     page_cars = []
+    # Serve from cache if available
+    try:
+        cached_html = read_cache(url)
+        if cached_html:
+            cards = _extract_cards_from_html(cached_html)
+            if cards:
+                for item in cards:
+                    car = extract_car(item)
+                    if car:
+                        page_cars.append(car)
+            return page, page_cars
+    except Exception:
+        pass
     try:
         # Manual retry loop with exponential backoff + jitter for network robustness
         max_attempts = 4
@@ -373,6 +469,11 @@ def scrape_single_page(page: int):
                     raise Exception(f"Status {status}")
 
                 html = resp.text
+                # write to cache for future runs
+                try:
+                    write_cache(url, html)
+                except Exception:
+                    pass
                 # If HTML too short, treat as no-content and retry once
                 if not html or len(html) < 500:
                     logging.debug(f"page {page} returned short HTML (len={len(html)})")
@@ -404,12 +505,25 @@ async def _fetch_page_async(client: httpx.AsyncClient, page: int, sem: asyncio.S
     url = f"{SEARCH_URL}?page={page}"
     async with sem:
         max_attempts = 3         # 3 async attempts before handing off to sync fallback
+        # check cache first
+        try:
+            cached_html = read_cache(url)
+            if cached_html:
+                return page, cached_html
+        except Exception:
+            pass
         for attempt in range(1, max_attempts + 1):
             try:
                 resp = await client.get(url, follow_redirects=True)
                 if resp.status_code != 200:
                     raise Exception(f"Status {resp.status_code}")
                 html = resp.text
+                # store in cache (offload to thread to avoid blocking event loop)
+                try:
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(None, write_cache, url, html)
+                except Exception:
+                    pass
                 if not html or len(html) < 500:
                     raise Exception("Short HTML")
                 return page, html
@@ -453,7 +567,8 @@ def scrape_cars(num_pages: int = 5) -> pd.DataFrame:
         A pandas DataFrame containing all scraped listings.
     """
     all_cars = []
-    seen_links = set()
+    # Seed seen_links from the persistent DB to avoid reprocessing across runs
+    seen_links = get_existing_links_from_db()
     # ⚠️  automobile.tn throttles above ~10 concurrent connections.
     # Keeping at 10 ensures near-zero async failures and avoids the costly sync fallback path.
     concurrency = min(10, max(2, num_pages))
@@ -579,8 +694,6 @@ def scrape_cars(num_pages: int = 5) -> pd.DataFrame:
 
 
 # ─── Persistance SQLite ────────────────────────────────────────────────────────
-import sqlite3
-import json
 
 def get_last_sync_time(meta_path: str = "data/metadata.json") -> dict:
     """Récupère l'état complet de la synchronisation (temps + lock)."""
@@ -623,6 +736,11 @@ def save_data(df: pd.DataFrame, db_path: str = "data/cars.db") -> pd.DataFrame:
     - `cars`: The latest snapshot of each unique car (keyed by link).
     - `price_history`: An append-only log of every price observation for history.
 
+    This function performs incremental cleanup: listings present in the DB but
+    not present in the current scrape are considered removed (sold/unavailable)
+    and will be removed from the `cars` snapshot. The `price_history` table is
+    preserved to keep historical observations.
+
     Args:
         df: The DataFrame to save.
         db_path: Path to the SQLite database.
@@ -638,30 +756,44 @@ def save_data(df: pd.DataFrame, db_path: str = "data/cars.db") -> pd.DataFrame:
 
     conn = sqlite3.connect(db_path)
     try:
-        # Pre-process prices for history
+        # Pre-process prices for history (keeps a numeric column for archival)
         df["price"] = pd.to_numeric(df["price_raw"].str.replace(r"[^\d]", "", regex=True), errors="coerce")
-        
-        # 1. Update Price History Table (Global Archive)
+
+        # 1. Update Price History Table (Global Archive) — append-only
         history_entry = df[["link", "price", "scraped_at"]].dropna(subset=["price"])
         history_entry.to_sql("price_history", conn, if_exists="append", index=False)
-        
-        # 2. Update Main Cars Table (Latest Snapshot)
+
+        # 2. Update Main Cars Table (Latest Snapshot) — perform incremental cleanup
         try:
             existing = pd.read_sql("SELECT * FROM cars", conn)
+
+            # Determine links currently in DB and links observed in this run
+            existing_links = set(existing["link"].dropna().astype(str).tolist()) if "link" in existing.columns else set()
+            current_links = set(df["link"].dropna().astype(str).tolist()) if "link" in df.columns else set()
+
+            # Links that disappeared since last run -> remove from snapshot (sold/unavailable)
+            removed_links = existing_links - current_links
+            removed_count = 0
+            if removed_links:
+                before = len(existing)
+                existing = existing[~existing["link"].isin(removed_links)]
+                removed_count = before - len(existing)
+                print(f"🗑️ Removed {removed_count} sold/unavailable listings")
+
+            # Merge and keep the latest record per link
             df_merged = pd.concat([existing, df], ignore_index=True)
-            # We keep the LATEST scraping for each link to show the current state
             df_merged = df_merged.drop_duplicates(subset=["link"], keep="last")
             df_merged.to_sql("cars", conn, if_exists="replace", index=False)
             print(f"💾 Data saved → {db_path}  ({len(df_merged)} unique listings)")
             update_last_sync_time()
             return df_merged
         except Exception:
-            # Table doesn't exist yet
+            # Table doesn't exist yet — create initial snapshot
             df.to_sql("cars", conn, if_exists="replace", index=False)
             print(f"💾 Data initialized → {db_path}  ({len(df)} rows)")
             update_last_sync_time()
             return df
-            
+
     except Exception as e:
         print(f"❌ Database Error: {e}")
         return df

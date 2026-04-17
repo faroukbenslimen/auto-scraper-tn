@@ -50,12 +50,11 @@ logs/
 
 # Local docs to keep private
 Projet Python.pdf
-implementation_plan.md
-new.md
-market_intelligence_report.md
-tttt.md
+
 15_04_26.md
 16_04_26.md
+EXAM_SUGGESTIONS.md
+IMPROVEMENTS.md
 
 # Persisted models and DBs
 models/
@@ -71,8 +70,10 @@ test_nlp.py
 
 # Planning docs
 *.docx
-the_journey.md
-auto_scraper_tn_plan_with_phase6.docx
+
+# HTTP cache
+http_cache/
+
 
 # Testing and verification
 tests/

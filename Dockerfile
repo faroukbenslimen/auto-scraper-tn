@@ -3,6 +3,6 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app
-EXPOSE 8501
+EXPOSE 8502
 ENV PYTHONUNBUFFERED=1
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.headless=true"]
+CMD ["streamlit", "run", "app.py", "--server.port=8502", "--server.headless=true"]
