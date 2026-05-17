@@ -5,6 +5,9 @@ This script performs a lightweight import check without hitting the network.
 It will exit non-zero if critical imports fail.
 """
 import sys
+import os
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 try:
     import scraper
