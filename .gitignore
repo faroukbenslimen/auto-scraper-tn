@@ -5,7 +5,8 @@ __pycache__/
 *.pyd
 *.egg-info/
 *.egg
-
+*.pdf
+*.png
 # Virtual environments
 venv/
 .venv/
@@ -55,7 +56,7 @@ Projet Python.pdf
 16_04_26.md
 EXAM_SUGGESTIONS.md
 IMPROVEMENTS.md
-
+⚙️_Explication_Technique_Détaillée_du_Code_du_Projet_Auto_Scraper_TN.pdf
 # Persisted models and DBs
 models/
 *.pkl
@@ -65,7 +66,6 @@ models/
 *.sqlite3
 
 # Dev / diagnostic scripts (not part of the app)
-diagnostic.py
 test_nlp.py
 
 # Planning docs
